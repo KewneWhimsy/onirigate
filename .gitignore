@@ -1,0 +1,28 @@
+# Elixir
+_build/
+deps/
+*.ez
+*.beam
+/config/*.secret.exs
+.elixir_ls/
+
+# Node / Bun
+node_modules/
+dist/
+.astro/
+
+# Environnement
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+erl_crash.dump
