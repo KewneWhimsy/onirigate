@@ -12,6 +12,20 @@ defmodule Onirigate.Games.CoralWars.GameServer do
     GenServer.start(__MODULE__, game_id, name: via(game_id))
   end
 
+  @doc """
+  Liste toutes les parties actives
+  """
+  def list_active_games do
+    Registry.select(Onirigate.GameRegistry, [{{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2"}}]}])
+    |> Enum.map(fn {game_id, pid} ->
+      case GenServer.call(pid, :get_info) do
+        {:ok, info} -> Map.put(info, :game_id, game_id)
+        _ -> nil
+      end
+    end)
+    |> Enum.reject(&is_nil/1)
+  end
+
   def join(game_id, player_id) do
     GenServer.call(via(game_id), {:join, player_id})
   catch
@@ -49,28 +63,63 @@ defmodule Onirigate.Games.CoralWars.GameServer do
   end
 
   @impl true
+  def handle_call(:get_info, _from, state) do
+    info = %{
+      player_count: map_size(state.players),
+      max_players: 2,
+      round: state.state.round,
+      phase: state.state.phase
+    }
+    {:reply, {:ok, info}, state}
+  end
+
+  @impl true
   def handle_call({:join, player_id}, _from, state) do
-    case map_size(state.players) do
-      0 ->
-        # Premier joueur
-        new_players = Map.put(state.players, player_id, 1)
-        new_state = %{state | players: new_players}
-        {:reply, {:ok, {state.state, 1}}, new_state}
+    IO.puts("=== JOIN REQUEST ===")
+    IO.puts("New player_id: #{player_id}")
+    IO.puts("Current players: #{inspect(Map.keys(state.players))}")
+    IO.puts("Player count: #{map_size(state.players)}")
 
-      1 ->
-        # Deuxième joueur
-        new_players = Map.put(state.players, player_id, 2)
-        new_state = %{state | players: new_players}
-        {:reply, {:ok, {state.state, 2}}, new_state}
+    # Vérifier si c'est une reconnexion (player_id déjà présent)
+    case Map.get(state.players, player_id) do
+      nil ->
+        IO.puts("NEW PLAYER - checking slots...")
+        # Nouveau joueur
+        case map_size(state.players) do
+          0 ->
+            IO.puts("SLOT 1 AVAILABLE - Assigning player 1")
+            # Premier joueur
+            new_players = Map.put(state.players, player_id, 1)
+            new_state = %{state | players: new_players}
+            {:reply, {:ok, {state.state, 1}}, new_state}
 
-      _ ->
-        # Partie pleine
-        {:reply, {:error, :room_full}, state}
+          1 ->
+            IO.puts("SLOT 2 AVAILABLE - Assigning player 2")
+            # Deuxième joueur
+            new_players = Map.put(state.players, player_id, 2)
+            new_state = %{state | players: new_players}
+            {:reply, {:ok, {state.state, 2}}, new_state}
+
+          count ->
+            # Partie pleine
+            IO.puts("ROOM FULL - #{count} players already!")
+            {:reply, {:error, :room_full}, state}
+        end
+
+      player_number ->
+        # Reconnexion : retourner le numéro de joueur existant
+        IO.puts("RECONNECTION - returning existing player number #{player_number}")
+        {:reply, {:ok, {state.state, player_number}}, state}
     end
   end
 
   @impl true
   def handle_call({:execute_action, player_id, dice, unit_position}, _from, state) do
+    IO.puts("=== EXECUTE_ACTION CALLED ===")
+    IO.puts("Player: #{player_id}")
+    IO.puts("Dice: #{dice}")
+    IO.puts("Unit: #{inspect(unit_position)}")
+
     player_number = state.players[player_id]
 
     # Vérifier que c'est bien le tour du joueur
@@ -80,6 +129,8 @@ defmodule Onirigate.Games.CoralWars.GameServer do
       new_game_state = %{state.state |
         current_player: if(state.state.current_player == 1, do: 2, else: 1)
       }
+
+      IO.puts("TURN CHANGED TO: #{new_game_state.current_player}")
 
       # Broadcast l'update
       broadcast_game_update(state.game_id, new_game_state)
@@ -109,6 +160,11 @@ defmodule Onirigate.Games.CoralWars.GameServer do
 
   @impl true
   def handle_cast({:notify_selection, player_id, selection_type, value}, state) do
+    IO.puts("=== NOTIFY_SELECTION ===")
+    IO.puts("Player: #{player_id}")
+    IO.puts("Type: #{selection_type}")
+    IO.puts("Value: #{inspect(value)}")
+
     # Broadcast la sélection aux autres joueurs
     Phoenix.PubSub.broadcast(
       Onirigate.PubSub,
