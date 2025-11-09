@@ -1,6 +1,8 @@
 defmodule OnirigateWeb.CoralWarsLive.Lobby do
   use OnirigateWeb, :live_view
 
+  alias Onirigate.Games.CoralWars.GameServer
+
   @impl true
   def mount(_params, _session, socket) do
     # Pour l'instant, des rooms en dur
@@ -8,7 +10,7 @@ defmodule OnirigateWeb.CoralWarsLive.Lobby do
       %{id: "room-1", name: "Partie rapide", players: 1, max_players: 2},
       %{id: "room-2", name: "Partie détente", players: 0, max_players: 2}
     ]
-    
+
     {:ok, assign(socket, rooms: rooms, creating: false)}
   end
 
@@ -16,13 +18,18 @@ defmodule OnirigateWeb.CoralWarsLive.Lobby do
   def handle_event("create_room", _params, socket) do
     # Générer un ID unique
     room_id = "room-#{System.unique_integer([:positive])}"
-    
+    # Vérifier que le GameServer existe
+    GameServer.start_game(room_id)
+
     # Rediriger vers la partie
     {:noreply, push_navigate(socket, to: ~p"/coral-wars/#{room_id}")}
   end
 
   @impl true
   def handle_event("join_room", %{"room-id" => room_id}, socket) do
+
+    GameServer.ensure_started(room_id)
+
     {:noreply, push_navigate(socket, to: ~p"/coral-wars/#{room_id}")}
   end
 
@@ -54,7 +61,7 @@ defmodule OnirigateWeb.CoralWarsLive.Lobby do
         <!-- Liste des parties -->
         <div class="max-w-4xl mx-auto space-y-4">
           <h2 class="text-2xl font-bold text-white mb-4">Parties disponibles</h2>
-          
+
           <%= if @rooms == [] do %>
             <div class="text-center text-slate-400 py-12">
               <p class="text-lg">Aucune partie en cours</p>
@@ -72,7 +79,7 @@ defmodule OnirigateWeb.CoralWarsLive.Lobby do
                       👥 <%= room.players %>/<%= room.max_players %> joueurs
                     </p>
                   </div>
-                  
+
                   <button
                     phx-click="join_room"
                     phx-value-room-id={room.id}

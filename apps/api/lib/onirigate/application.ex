@@ -11,6 +11,7 @@ defmodule Onirigate.Application do
       OnirigateWeb.Telemetry,
       {DNSCluster, query: Application.get_env(:onirigate, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Onirigate.PubSub},
+      {Registry, keys: :unique, name: Onirigate.GameRegistry},
       # Start a worker by calling: Onirigate.Worker.start_link(arg)
       # {Onirigate.Worker, arg},
       # Start to serve requests, typically the last entry
