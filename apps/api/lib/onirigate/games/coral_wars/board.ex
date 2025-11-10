@@ -2,31 +2,28 @@ defmodule Onirigate.Games.CoralWars.Board do
   @moduledoc """
   Gère le plateau 8x8 et les positions
   """
-
   @board_size 8
 
   @doc """
-  Crée un plateau vide avec les récifs coralliens
+  Crée un plateau vide
   """
   def new do
     # Plateau vide
-    board = for row <- 1..@board_size, col <- 1..@board_size, into: %{} do
+    for row <- 1..@board_size, col <- 1..@board_size, into: %{} do
       {{row, col}, nil}
     end
-
-    # Ajouter les récifs (obstacles)
-    # Chaque joueur place 2 récifs pendant le déploiement
-    board
   end
 
   @doc """
-  Place une unité sur le plateau
+  Place une unité sur le plateau à une position donnée.
+  Retourne le board mis à jour (sans tuple {:ok, board}).
   """
   def place_unit(board, position, unit) do
-    if valid_position?(position) and is_nil(board[position]) do
-      {:ok, Map.put(board, position, unit)}
+    if valid_position?(position) do
+      Map.put(board, position, unit)
     else
-      {:error, :invalid_position}
+      # Retourne le board inchangé si la position est invalide
+      board
     end
   end
 
@@ -34,17 +31,47 @@ defmodule Onirigate.Games.CoralWars.Board do
   Déplace une unité
   """
   def move_unit(board, from, to) do
-    with {:ok, unit} <- get_unit(board, from),
+    with {:ok, _unit} <- get_unit(board, from),
          true <- valid_position?(to),
          true <- is_nil(board[to]) or is_reef?(board[to]) == false do
-      board
-      |> Map.put(from, nil)
-      |> Map.put(to, unit)
-      |> then(&{:ok, &1})
+      {:ok, board |> Map.put(from, nil) |> Map.put(to, board[from])}
     else
       _ -> {:error, :invalid_move}
     end
   end
+
+  @doc """
+  Déplace une unité de 1 case et pousse une unité adjacente de 1 case dans la direction opposée.
+  Retourne {:ok, new_board} ou {:error, reason}.
+  """
+  def push_unit(board, from_pos, {dr, dc}) do
+    {from_row, from_col} = from_pos
+    push_pos = {from_row + dr, from_col + dc}
+    target_pos = {from_row + 2*dr, from_col + 2*dc}
+
+    with {:ok, pushing_unit} <- get_unit(board, from_pos),
+         {:ok, pushed_unit} <- get_unit(board, push_pos),
+         true <- valid_position?(target_pos),
+         true <- is_nil(board[target_pos]) do
+
+      # 1. Déplace l'unité qui pousse vers push_pos
+      board =
+        board
+        |> Map.put(from_pos, nil)
+        |> Map.put(push_pos, pushing_unit)
+
+      # 2. Déplace l'unité poussée vers target_pos
+      board =
+        board
+        |> Map.put(push_pos, nil)
+        |> Map.put(target_pos, pushed_unit)
+
+      {:ok, board}
+    else
+      _ -> {:error, :push_failed}
+    end
+  end
+
 
   @doc """
   Récupère une unité à une position
@@ -68,10 +95,10 @@ defmodule Onirigate.Games.CoralWars.Board do
   """
   def orthogonal_adjacent({row, col}) do
     [
-      {row - 1, col},  # Haut
-      {row + 1, col},  # Bas
-      {row, col - 1},  # Gauche
-      {row, col + 1}   # Droite
+      {row - 1, col},
+      {row + 1, col},
+      {row, col - 1},
+      {row, col + 1}
     ]
     |> Enum.filter(&valid_position?/1)
   end
@@ -81,10 +108,10 @@ defmodule Onirigate.Games.CoralWars.Board do
   """
   def diagonal_adjacent({row, col}) do
     [
-      {row - 1, col - 1},  # Haut-gauche
-      {row - 1, col + 1},  # Haut-droite
-      {row + 1, col - 1},  # Bas-gauche
-      {row + 1, col + 1}   # Bas-droite
+      {row - 1, col - 1},
+      {row - 1, col + 1},
+      {row + 1, col - 1},
+      {row + 1, col + 1}
     ]
     |> Enum.filter(&valid_position?/1)
   end
@@ -115,7 +142,7 @@ defmodule Onirigate.Games.CoralWars.Board do
   """
   def baby_in_enemy_row?(board, player) do
     target_row = if player == 1, do: @board_size, else: 1
-    
+
     Enum.any?(1..@board_size, fn col ->
       case board[{target_row, col}] do
         %{type: :baby, player: ^player} -> true

@@ -2,7 +2,6 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
   @moduledoc """
   Règles et logique du jeu Coral Wars
   """
-
   alias Onirigate.Games.CoralWars.{Board, Unit}
 
   @doc """
@@ -42,7 +41,6 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
   """
   def start_round(state) do
     dice_pool = Enum.map(1..7, fn _ -> Enum.random(1..6) end)
-
     state
     |> Map.put(:dice_pool, dice_pool)
     |> Map.put(:dice_reserve, [])
@@ -56,41 +54,26 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
       {pos, other} -> {pos, other}
     end)
     |> Enum.into(%{})
-
     %{state | board: board}
   end
 
   # ========== ACTIONS ==========
-
   @doc """
   Exécute une action MOVE (dés 1-3)
-  Destination doit être fournie par le frontend
   """
   def move(state, from_pos, to_pos, dice_value) do
     with {:ok, unit} <- Board.get_unit(state.board, from_pos),
          :ok <- validate_move(state, unit, from_pos, to_pos, dice_value) do
-
-      # Déplacer l'unité
       {:ok, new_board} = Board.move_unit(state.board, from_pos, to_pos)
-
-      # Marquer l'unité comme activée
       activated_unit = %{new_board[to_pos] | activated: true}
       final_board = Map.put(new_board, to_pos, activated_unit)
-
-      # Retirer le dé du pool
       new_pool = List.delete(state.dice_pool, dice_value)
-
       new_state = %{state |
         board: final_board,
         dice_pool: new_pool
       }
-
-      # Changer de joueur
       new_state = change_player(new_state)
-
       {:ok, new_state}
-    else
-      error -> error
     end
   end
 
@@ -100,12 +83,82 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
          :ok <- check_unit_can_activate(unit),
          :ok <- check_unit_belongs_to_player(unit, state.current_player),
          :ok <- check_not_same_position(from_pos, to_pos),
-         :ok <- check_distance(from_pos, to_pos, 3),
-         :ok <- check_path_clear(state.board, from_pos, to_pos, unit.faction) do
+         :ok <- check_distance(from_pos, to_pos, dice_value),
+         :ok <- check_path_clear(state.board, to_pos) do
       :ok
     end
   end
 
+  @doc """
+Exécute une action PUSH (dés 1-3)
+Déplace une unité de 1 case orthogonalement et pousse une unité adjacente
+"""
+def push(state, from_pos, direction, dice_value) do
+  with {:ok, unit} <- Board.get_unit(state.board, from_pos),
+       :ok <- validate_push(state, unit, from_pos, direction, dice_value),
+       {:ok, new_board} <- Board.push_unit(state.board, from_pos, direction) do
+
+    # Marque l'unité comme activée
+    {dr, dc} = direction
+    {from_row, from_col} = from_pos
+    push_pos = {from_row + dr, from_col + dc}
+
+    # Récupère l'unité qui a poussé (maintenant en push_pos)
+    case Board.get_unit(new_board, push_pos) do
+      {:ok, pushed_unit} ->
+        activated_unit = %{pushed_unit | activated: true}
+        final_board = Map.put(new_board, push_pos, activated_unit)
+        new_pool = List.delete(state.dice_pool, dice_value)
+        new_state = %{state | board: final_board, dice_pool: new_pool}
+        {:ok, change_player(new_state)}
+      _ ->
+        {:error, :push_failed}
+    end
+  end
+end
+
+
+  defp validate_push(state, unit, from_pos, direction, dice_value) do
+    {dr, dc} = direction
+    {from_row, from_col} = from_pos
+    push_pos = {from_row + dr, from_col + dc}
+    target_pos = {from_row + 2*dr, from_col + 2*dc}
+
+    with :ok <- check_dice_value(dice_value, [1, 2, 3]),
+         :ok <- check_dice_in_pool(state.dice_pool, dice_value),
+         :ok <- check_unit_can_activate(unit),
+         :ok <- check_unit_belongs_to_player(unit, state.current_player),
+         :ok <- check_push_direction_valid(direction),
+         :ok <- check_unit_at_position(state.board, push_pos),
+         :ok <- check_target_position_clear(state.board, target_pos) do
+      :ok
+    end
+  end
+
+  defp check_push_direction_valid({dr, dc}) do
+    if (abs(dr) == 1 && dc == 0) || (dr == 0 && abs(dc) == 1) do
+      :ok
+    else
+      {:error, :invalid_direction}
+    end
+  end
+
+  defp check_unit_at_position(board, position) do
+    case board[position] do
+      %Unit{} -> :ok
+      _ -> {:error, :no_unit_to_push}
+    end
+  end
+
+  defp check_target_position_clear(board, target_pos) do
+    if is_nil(board[target_pos]) do
+      :ok
+    else
+      {:error, :target_position_occupied}
+    end
+  end
+
+  # ========== VALIDATIONS COMMUNES ==========
   defp check_dice_value(dice_value, allowed_values) do
     if dice_value in allowed_values do
       :ok
@@ -159,12 +212,7 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
     abs(r1 - r2) + abs(c1 - c2)
   end
 
-  defp check_path_clear(board, from_pos, to_pos, faction) do
-    # Vérifier que le chemin est praticable
-    path = calculate_path(from_pos, to_pos)
-
-    # Pour l'instant, on vérifie juste que la destination est libre
-    # TODO: Vérifier les cases intermédiaires si nécessaire
+  defp check_path_clear(board, to_pos) do
     case board[to_pos] do
       nil -> :ok
       :reef -> {:error, :destination_blocked}
@@ -173,76 +221,32 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
     end
   end
 
-  defp calculate_path(from_pos, to_pos) do
-    # Pour l'instant, on retourne juste les 2 positions
-    # TODO: Calculer le chemin réel si on veut vérifier les cases intermédiaires
-    [from_pos, to_pos]
-  end
-
   defp change_player(state) do
     next_player = if state.current_player == 1, do: 2, else: 1
     %{state | current_player: next_player}
   end
 
-  # ========== ACTIONS À IMPLÉMENTER ==========
-
-  @doc """
-  PUSH action (dés 1-3)
-  """
-  def push(state, from_pos, direction, dice_value) do
-    # TODO: Implémenter push
+  # ========== ACTIONS À IMPLÉMENTER (stubs) ==========
+  def attack(_state, _attacker_pos, _target_pos, _dice_value) do
     {:error, :not_implemented}
   end
 
-  @doc """
-  ATTACK action (dés 4-5)
-  """
-  def attack(state, attacker_pos, target_pos, dice_value) do
-    # TODO: Implémenter attack
+  def intimidate(_state, _from_pos, _target_pos, _dice_value) do
     {:error, :not_implemented}
   end
 
-  @doc """
-  INTIMIDATE action (dés 4-5)
-  """
-  def intimidate(state, from_pos, target_pos, dice_value) do
-    # TODO: Implémenter intimidate
+  def charge(_state, _from_pos, _direction, _dice_value) do
     {:error, :not_implemented}
   end
 
-  @doc """
-  CHARGE action (dé 6)
-  """
-  def charge(state, from_pos, direction, dice_value) do
-    # TODO: Implémenter charge
-    {:error, :not_implemented}
-  end
-
-  # ========== UTILITAIRES ==========
-
-  @doc """
-  Vérifie les conditions de victoire
-  """
+  # ========== VÉRIFICATION DE VICTOIRE ==========
   def check_victory(state) do
     cond do
-      # Baby du joueur 1 dans la rangée 8
-      Board.baby_in_enemy_row?(state.board, 1) ->
-        {:winner, 1}
-
-      # Baby du joueur 2 dans la rangée 1
-      Board.baby_in_enemy_row?(state.board, 2) ->
-        {:winner, 2}
-
-      # Baby du joueur 1 mort (TODO: vérifier board)
-      not has_baby?(state.board, 1) ->
-        {:winner, 2}
-
-      # Baby du joueur 2 mort (TODO: vérifier board)
-      not has_baby?(state.board, 2) ->
-        {:winner, 1}
-
-      true ->
-        :continue
+      Board.baby_in_enemy_row?(state.board, 1) -> {:winner, 1}
+      Board.baby_in_enemy_row?(state.board, 2) -> {:winner, 2}
+      not has_baby?(state.board, 1) -> {:winner, 2}
+      not has_baby?(state.board, 2) -> {:winner, 1}
+      true -> :continue
     end
   end
 
@@ -254,23 +258,17 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
     end)
   end
 
-  @doc """
-  Met un dé en réserve
-  """
+  # ========== GESTION DES DÉS ==========
   def put_dice_in_reserve(state, dice_value) do
     if dice_value in state.dice_pool and length(state.dice_reserve) < 2 do
       new_pool = List.delete(state.dice_pool, dice_value)
       new_reserve = [dice_value | state.dice_reserve]
-
       {:ok, %{state | dice_pool: new_pool, dice_reserve: new_reserve}}
     else
       {:error, :cannot_reserve}
     end
   end
 
-  @doc """
-  Swap un dé du pool avec un de la réserve
-  """
   def swap_dice(state, pool_dice, reserve_dice) do
     if pool_dice in state.dice_pool and reserve_dice in state.dice_reserve do
       new_pool = state.dice_pool
@@ -287,9 +285,6 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
     end
   end
 
-  @doc """
-  Passe le tour
-  """
   def pass_turn(state) do
     case check_victory(state) do
       {:winner, player} ->
@@ -298,7 +293,6 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
       :continue ->
         next_player = if state.current_player == 1, do: 2, else: 1
 
-        # Si le pool est vide, nouveau round
         if state.dice_pool == [] do
           state
           |> Map.put(:current_player, next_player)
