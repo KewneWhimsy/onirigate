@@ -58,6 +58,7 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
   end
 
   # ========== ACTIONS ==========
+
   @doc """
   Exécute une action MOVE (dés 1-3)
   """
@@ -91,12 +92,17 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
 
   @doc """
   Exécute une action PUSH (dés 1-3)
-  Déplace une unité de 1 case et pousse une unité adjacente de 1 case dans la direction opposée
+  Déplace une unité de 1 case et pousse une unité adjacente de 1 case dans la même direction.
   """
   def push(state, from_pos, direction, dice_value) do
+    IO.puts("PUSH: Début de l'action avec from_pos=#{inspect(from_pos)}, direction=#{inspect(direction)}")
+
     with {:ok, unit} <- Board.get_unit(state.board, from_pos),
          :ok <- validate_push(state, unit, from_pos, direction, dice_value),
          {:ok, new_board} <- Board.push_unit(state.board, from_pos, direction) do
+
+      IO.puts("PUSH: Succès, nouveau board=#{inspect(new_board)}")
+
       new_pool = List.delete(state.dice_pool, dice_value)
       new_state = %{state |
         board: new_board,
@@ -110,8 +116,10 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
   defp validate_push(state, unit, from_pos, direction, dice_value) do
     {dr, dc} = direction
     {from_row, from_col} = from_pos
-    push_pos = {from_row + dr, from_col + dc}
-    target_pos = {from_row + 2*dr, from_col + 2*dc}
+    push_pos = {from_row + dr, from_col + dc}  # Position de la cible à pousser
+    target_pos = {from_row + 2*dr, from_col + 2*dc}  # Position finale de la cible
+
+    IO.puts("PUSH: Validation - push_pos=#{inspect(push_pos)}, target_pos=#{inspect(target_pos)}")
 
     with :ok <- check_dice_value(dice_value, [1, 2, 3]),
          :ok <- check_dice_in_pool(state.dice_pool, dice_value),
@@ -134,7 +142,7 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
 
   defp check_unit_at_position(board, position) do
     case board[position] do
-      %Unit{} -> :ok
+      %Unit{} -> :ok  # Toute unité (allié ou ennemi) est valide pour être poussée
       _ -> {:error, :no_unit_to_push}
     end
   end
@@ -148,6 +156,7 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
   end
 
   # ========== VALIDATIONS COMMUNES ==========
+
   defp check_dice_value(dice_value, allowed_values) do
     if dice_value in allowed_values do
       :ok
@@ -216,6 +225,7 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
   end
 
   # ========== ACTIONS À IMPLÉMENTER (stubs) ==========
+
   def attack(_state, _attacker_pos, _target_pos, _dice_value) do
     {:error, :not_implemented}
   end
@@ -229,6 +239,7 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
   end
 
   # ========== VÉRIFICATION DE VICTOIRE ==========
+
   def check_victory(state) do
     cond do
       Board.baby_in_enemy_row?(state.board, 1) -> {:winner, 1}
@@ -248,6 +259,7 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
   end
 
   # ========== GESTION DES DÉS ==========
+
   def put_dice_in_reserve(state, dice_value) do
     if dice_value in state.dice_pool and length(state.dice_reserve) < 2 do
       new_pool = List.delete(state.dice_pool, dice_value)
@@ -263,11 +275,9 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
       new_pool = state.dice_pool
       |> List.delete(pool_dice)
       |> then(&[reserve_dice | &1])
-
       new_reserve = state.dice_reserve
       |> List.delete(reserve_dice)
       |> then(&[pool_dice | &1])
-
       {:ok, %{state | dice_pool: new_pool, dice_reserve: new_reserve}}
     else
       {:error, :invalid_swap}
@@ -278,10 +288,8 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
     case check_victory(state) do
       {:winner, player} ->
         {:ok, %{state | phase: :finished, winner: player}}
-
       :continue ->
         next_player = if state.current_player == 1, do: 2, else: 1
-
         if state.dice_pool == [] do
           state
           |> Map.put(:current_player, next_player)
