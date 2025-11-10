@@ -90,33 +90,22 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
   end
 
   @doc """
-Exécute une action PUSH (dés 1-3)
-Déplace une unité de 1 case orthogonalement et pousse une unité adjacente
-"""
-def push(state, from_pos, direction, dice_value) do
-  with {:ok, unit} <- Board.get_unit(state.board, from_pos),
-       :ok <- validate_push(state, unit, from_pos, direction, dice_value),
-       {:ok, new_board} <- Board.push_unit(state.board, from_pos, direction) do
-
-    # Marque l'unité comme activée
-    {dr, dc} = direction
-    {from_row, from_col} = from_pos
-    push_pos = {from_row + dr, from_col + dc}
-
-    # Récupère l'unité qui a poussé (maintenant en push_pos)
-    case Board.get_unit(new_board, push_pos) do
-      {:ok, pushed_unit} ->
-        activated_unit = %{pushed_unit | activated: true}
-        final_board = Map.put(new_board, push_pos, activated_unit)
-        new_pool = List.delete(state.dice_pool, dice_value)
-        new_state = %{state | board: final_board, dice_pool: new_pool}
-        {:ok, change_player(new_state)}
-      _ ->
-        {:error, :push_failed}
+  Exécute une action PUSH (dés 1-3)
+  Déplace une unité de 1 case et pousse une unité adjacente de 1 case dans la direction opposée
+  """
+  def push(state, from_pos, direction, dice_value) do
+    with {:ok, unit} <- Board.get_unit(state.board, from_pos),
+         :ok <- validate_push(state, unit, from_pos, direction, dice_value),
+         {:ok, new_board} <- Board.push_unit(state.board, from_pos, direction) do
+      new_pool = List.delete(state.dice_pool, dice_value)
+      new_state = %{state |
+        board: new_board,
+        dice_pool: new_pool
+      }
+      new_state = change_player(new_state)
+      {:ok, new_state}
     end
   end
-end
-
 
   defp validate_push(state, unit, from_pos, direction, dice_value) do
     {dr, dc} = direction
