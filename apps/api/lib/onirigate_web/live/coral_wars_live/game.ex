@@ -5,222 +5,250 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
 
   @impl true
   def mount(%{"room_id" => room_id}, _session, socket) do
-    IO.puts("=== GAME MOUNT ===")
-    IO.puts("Room: #{room_id}")
-    IO.puts("Connected?: #{connected?(socket)}")
-
-    # Ne joindre la partie QUE quand le WebSocket est connecté
-    # Ça évite de créer 2 joueurs (1 au HTTP GET, 1 au WebSocket)
     if connected?(socket) do
-      # S'abonner aux updates PubSub
       Phoenix.PubSub.subscribe(Onirigate.PubSub, "game:#{room_id}")
-
-      # Générer un player_id unique
       player_id = "player-#{System.unique_integer([:positive])}"
-      IO.puts("Generated player_id: #{player_id}")
 
       case GameServer.join(room_id, player_id) do
         {:ok, {game_state, player_number}} ->
-          IO.puts("JOIN SUCCESS - Player #{player_number}")
-
-          socket = socket
-          |> assign(room_id: room_id)
-          |> assign(player_id: player_id)
-          |> assign(player_number: player_number)
-          |> assign(state: game_state)
-          |> assign(selected_dice: nil)
-          |> assign(selected_unit: nil)
-          |> assign(opponent_dice: nil)
-          |> assign(opponent_unit: nil)
+          socket =
+            socket
+            |> assign(
+              room_id: room_id,
+              player_id: player_id,
+              player_number: player_number,
+              state: game_state,
+              selected_dice: nil,
+              selected_unit: nil,
+              selected_destination: nil,
+              reachable_positions: [],
+              opponent_dice: nil,
+              opponent_unit: nil
+            )
 
           {:ok, socket}
 
         {:error, :room_not_found} ->
-          IO.puts("ROOM NOT FOUND - Creating room and retrying")
-          # Si la room n'existe pas, la créer et réessayer
           GameServer.start_game(room_id)
           mount(%{"room_id" => room_id}, _session, socket)
 
         {:error, :room_full} ->
-          IO.puts("ROOM FULL - Redirecting to lobby")
-          socket = socket
-          |> put_flash(:error, "La partie est pleine (2/2 joueurs)")
-          |> push_navigate(to: ~p"/coral-wars")
+          socket =
+            socket
+            |> put_flash(:error, "La partie est pleine (2/2 joueurs)")
+            |> push_navigate(to: ~p"/coral-wars")
 
           {:ok, socket}
       end
     else
-      # Premier mount (HTTP GET) : juste assigner des valeurs temporaires
-      IO.puts("First mount (HTTP) - waiting for WebSocket connection")
-      {:ok, assign(socket,
-        room_id: room_id,
-        player_id: nil,
-        player_number: nil,
-        state: nil,
-        selected_dice: nil,
-        selected_unit: nil,
-        opponent_dice: nil,
-        opponent_unit: nil
-      )}
+      {:ok,
+       assign(socket,
+         room_id: room_id,
+         player_id: nil,
+         player_number: nil,
+         state: nil,
+         selected_dice: nil,
+         selected_unit: nil,
+         selected_destination: nil,
+         reachable_positions: [],
+         opponent_dice: nil,
+         opponent_unit: nil
+       )}
     end
   end
 
-  # Gérer les updates PubSub
+  # --- PubSub updates ---
   @impl true
-  def handle_info({:game_update, new_state}, socket) do
-    {:noreply, assign(socket, state: new_state)}
-  end
+  def handle_info({:game_update, new_state}, socket),
+    do: {:noreply, assign(socket, state: new_state)}
 
   @impl true
   def handle_info({:player_selection, player_id, selection_type, value}, socket) do
-    # Si c'est l'adversaire qui sélectionne
     if player_id != socket.assigns.player_id do
       case selection_type do
         :dice ->
           {:noreply, assign(socket, opponent_dice: value)}
+
         :unit ->
           {:noreply, assign(socket, opponent_unit: value)}
+
         :clear ->
-          {:noreply, assign(socket, opponent_dice: nil, opponent_unit: nil)}
+          {:noreply,
+           assign(socket,
+             opponent_dice: nil,
+             opponent_unit: nil
+           )}
       end
     else
       {:noreply, socket}
     end
   end
 
-  # Sélection d'un dé - NE DOIT PAS changer de tour
+  # --- Sélection d'un dé (ne désélectionne plus l'unité) ---
   @impl true
   def handle_event("select_dice", %{"dice" => dice_str, "index" => index_str}, socket) do
-    IO.puts("=== SELECT_DICE EVENT ===")
-    IO.puts("Dice value: #{dice_str}")
-    IO.puts("Dice index: #{index_str}")
-    IO.puts("Current player: #{socket.assigns.state.current_player}")
-    IO.puts("My player number: #{socket.assigns.player_number}")
+    state = socket.assigns.state
 
-    # Vérifier que c'est bien notre tour
-    if socket.assigns.state.current_player != socket.assigns.player_number do
-      IO.puts("NOT MY TURN!")
-      {:noreply, put_flash(socket, :error, "Ce n'est pas ton tour !")}
+    if state.current_player != socket.assigns.player_number do
+      {:noreply, put_flash(socket, :error, "Ce n’est pas ton tour !")}
     else
       dice_value = String.to_integer(dice_str)
       dice_index = String.to_integer(index_str)
+      new_selection = if socket.assigns.selected_dice == {dice_value, dice_index}, do: nil, else: {dice_value, dice_index}
 
-      # Stocker à la fois la valeur ET l'index pour distinguer les dés identiques
-      new_selection = if socket.assigns.selected_dice == {dice_value, dice_index} do
-        nil
-      else
-        {dice_value, dice_index}
-      end
+      # Notify opponent about dice selection
+      GameServer.notify_selection(socket.assigns.room_id, socket.assigns.player_id, :dice, new_selection)
 
-      IO.puts("New selection: #{inspect(new_selection)}")
+      reachable_positions =
+        if new_selection && socket.assigns.selected_unit do
+          {dval, _} = new_selection
+          compute_reachable_positions(socket.assigns.selected_unit, dval)
+        else
+          []
+        end
 
-      # Notifier les autres joueurs via GameServer
-      GameServer.notify_selection(
-        socket.assigns.room_id,
-        socket.assigns.player_id,
-        :dice,
-        new_selection
-      )
-
-      IO.puts("Selection done, NO TURN CHANGE")
-      {:noreply, assign(socket, selected_dice: new_selection)}
+      {:noreply,
+       assign(socket,
+         selected_dice: new_selection,
+         reachable_positions: reachable_positions,
+         selected_destination: if(new_selection == nil, do: nil, else: socket.assigns.selected_destination)
+       )}
     end
   end
 
-  # Sélection d'une cellule
+  # --- Sélection d'une cellule (unité ou destination) ---
   @impl true
   def handle_event("select_cell", %{"row" => row_str, "col" => col_str}, socket) do
     position = {String.to_integer(row_str), String.to_integer(col_str)}
     state = socket.assigns.state
 
-    case Board.get_unit(state.board, position) do
-      {:ok, unit} ->
-        # Si c'est l'unité du joueur actuel, on la sélectionne
-        if unit.player == state.current_player do
-          GameServer.notify_selection(
-            socket.assigns.room_id,
-            socket.assigns.player_id,
-            :unit,
-            position
-          )
-          {:noreply, assign(socket, selected_unit: position)}
-        else
-          {:noreply, socket}
-        end
+    # protect if state or board nil
+    cond do
+      is_nil(state) || is_nil(state.board) ->
+        {:noreply, socket}
 
-      {:error, :no_unit} ->
-        # Pas d'unité ici, désélectionner
-        GameServer.notify_selection(
-          socket.assigns.room_id,
-          socket.assigns.player_id,
-          :unit,
-          nil
-        )
-        {:noreply, assign(socket, selected_unit: nil)}
+      true ->
+        case Board.get_unit(state.board, position) do
+          {:ok, unit} ->
+            # If it's our unit
+            if unit.player == state.current_player do
+              # toggle selection if same unit clicked
+              if socket.assigns.selected_unit == position do
+                GameServer.notify_selection(socket.assigns.room_id, socket.assigns.player_id, :unit, nil)
+
+                {:noreply,
+                 assign(socket,
+                   selected_unit: nil,
+                   selected_destination: nil,
+                   reachable_positions: []
+                 )}
+              else
+                GameServer.notify_selection(socket.assigns.room_id, socket.assigns.player_id, :unit, position)
+
+                reachable_positions =
+                  if socket.assigns.selected_dice do
+                    {dice_value, _} = socket.assigns.selected_dice
+                    compute_reachable_positions(position, dice_value)
+                  else
+                    []
+                  end
+
+                {:noreply,
+                 assign(socket,
+                   selected_unit: position,
+                   selected_destination: nil,
+                   reachable_positions: reachable_positions
+                 )}
+              end
+            else
+              {:noreply, socket}
+            end
+
+          {:error, :no_unit} ->
+            # empty cell: if we have dice+unit -> set as destination, else clear
+            if socket.assigns.selected_dice && socket.assigns.selected_unit do
+              {:noreply, assign(socket, selected_destination: position)}
+            else
+              {:noreply,
+               assign(socket,
+                 selected_unit: nil,
+                 selected_destination: nil,
+                 reachable_positions: []
+               )}
+            end
+        end
     end
   end
 
-  # Exécuter l'action avec le dé et l'unité sélectionnés
+  # --- Exécuter l'action (MOVE) ---
   @impl true
   def handle_event("execute_action", _params, socket) do
-    with selected_dice when selected_dice != nil <- socket.assigns.selected_dice,
-         unit when unit != nil <- socket.assigns.selected_unit do
-
-      # Extraire la valeur du dé (sans l'index)
-      {dice_value, _index} = selected_dice
-
-      # Envoyer l'action au serveur
-      case GameServer.execute_action(
-        socket.assigns.room_id,
-        socket.assigns.player_id,
-        dice_value,
-        unit
-      ) do
+    with {dice_value, _index} <- socket.assigns.selected_dice,
+         from_pos when not is_nil(from_pos) <- socket.assigns.selected_unit,
+         to_pos when not is_nil(to_pos) <- socket.assigns.selected_destination do
+      case GameServer.execute_move(socket.assigns.room_id, socket.assigns.player_id, dice_value, from_pos, to_pos) do
         {:ok, _} ->
-          # Réinitialiser les sélections après l'action
-          GameServer.notify_selection(
-            socket.assigns.room_id,
-            socket.assigns.player_id,
-            :clear,
-            nil
-          )
-          {:noreply, assign(socket, selected_dice: nil, selected_unit: nil)}
+          GameServer.notify_selection(socket.assigns.room_id, socket.assigns.player_id, :clear, nil)
+
+          {:noreply,
+           assign(socket,
+             selected_dice: nil,
+             selected_unit: nil,
+             selected_destination: nil,
+             reachable_positions: []
+           )}
 
         {:error, reason} ->
-          {:noreply, put_flash(socket, :error, "Action impossible : #{reason}")}
+          {:noreply, put_flash(socket, :error, "Action impossible : #{inspect(reason)}")}
       end
     else
-      _ ->
-        {:noreply, put_flash(socket, :error, "Sélectionne un dé et une unité")}
+      _ -> {:noreply, put_flash(socket, :error, "Sélectionne : dé → unité → destination")}
     end
   end
 
-  # Passer le tour
+  # --- Passer le tour ---
   @impl true
   def handle_event("pass", _params, socket) do
-    case GameServer.pass_turn(
-      socket.assigns.room_id,
-      socket.assigns.player_id
-    ) do
+    case GameServer.pass_turn(socket.assigns.room_id, socket.assigns.player_id) do
       {:ok, _} ->
-        # Réinitialiser les sélections
-        GameServer.notify_selection(
-          socket.assigns.room_id,
-          socket.assigns.player_id,
-          :clear,
-          nil
-        )
-        {:noreply, assign(socket, selected_dice: nil, selected_unit: nil)}
+        GameServer.notify_selection(socket.assigns.room_id, socket.assigns.player_id, :clear, nil)
+        {:noreply,
+         assign(socket,
+           selected_dice: nil,
+           selected_unit: nil,
+           selected_destination: nil,
+           reachable_positions: []
+         )}
 
-      {:error, reason} ->
+      {:error, _} ->
         {:noreply, put_flash(socket, :error, "Action impossible")}
     end
   end
 
-  # RENDU (render)
+  # --- Calcul des cases atteignables (cardinal + stop at board edge) ---
+  defp compute_reachable_positions({row, col}, dice_value) when is_integer(dice_value) and dice_value > 0 do
+    directions = [
+      {-1, 0}, # up
+      {1, 0},  # down
+      {0, -1}, # left
+      {0, 1}   # right
+    ]
+
+    for {dr, dc} <- directions,
+        step <- 1..dice_value,
+        new_row = row + dr * step,
+        new_col = col + dc * step,
+        new_row in 1..8,
+        new_col in 1..8 do
+      {new_row, new_col}
+    end
+  end
+
+  defp compute_reachable_positions(_, _), do: []
+
+  # --- Render ---
   @impl true
   def render(assigns) do
-    # Si state est nil (premier mount HTTP), afficher un loader
     if is_nil(assigns[:state]) do
       ~H"""
       <div class="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-blue-950 flex items-center justify-center">
@@ -241,12 +269,9 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
       <div class="container mx-auto max-w-6xl">
         <%!-- Header --%>
         <div class="text-center mb-6">
-          <h1 class="text-4xl font-bold text-white mb-2">
-            🪸 Coral Wars
-          </h1>
+          <h1 class="text-4xl font-bold text-white mb-2">🪸 Coral Wars</h1>
           <p class="text-slate-400">Partie : {@room_id}</p>
           <div class="mt-4">
-            <%!-- Affichage du joueur actuel ET de qui on est --%>
             <div class="text-lg text-slate-300 mb-2">
               Tu es le <span class="font-bold text-cyan-400">Joueur {@player_number}</span>
               <span class="text-xs text-slate-500 ml-2">(ID: {@player_id})</span>
@@ -265,7 +290,7 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
         </div>
 
         <div class="grid lg:grid-cols-3 gap-6">
-          <%!-- Colonne gauche : Infos --%>
+          <%!-- Left column --%>
           <div class="space-y-4">
             <div class="bg-slate-800/50 rounded-xl p-4 border border-slate-700">
               <h3 class="text-xl font-bold text-white mb-2">Round {@state.round}</h3>
@@ -277,46 +302,62 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
               <div class="text-slate-300 text-sm space-y-2">
                 <%= if @state.current_player == @player_number do %>
                   <p class="text-cyan-400 font-bold">C'est ton tour !</p>
-                  <p>1. Clique sur un dé 🎲</p>
-                  <p>2. Sélectionne une unité 🔵/🔴</p>
-                  <p>3. Clique "Exécuter l'action" ✅</p>
+                  <p>1️⃣ Clique sur un dé 🎲</p>
+                  <p>2️⃣ Sélectionne une unité 🔵/🔴</p>
+                  <p>3️⃣ Clique sur la destination ⬜</p>
+                  <p>4️⃣ Clique "Exécuter l'action" ✅</p>
                 <% else %>
                   <p class="text-red-400 font-bold">Tour de l'adversaire</p>
-                  <p>Attends ton tour...</p>
+                  <p>Patiente un instant...</p>
                 <% end %>
               </div>
             </div>
 
-            <%!-- Sélections actuelles --%>
-            <%= if @selected_dice || @selected_unit do %>
-              <div class="bg-yellow-900/30 rounded-xl p-4 border border-yellow-500/50">
-                <h3 class="text-lg font-bold text-yellow-300 mb-2">Tes sélections</h3>
-                <%= if @selected_dice do %>
-                  <% {dice_value, _index} = @selected_dice %>
-                  <p class="text-yellow-100">🎲 Dé : {dice_value}</p>
-                <% end %>
-                <%= if @selected_unit do %>
-                  <p class="text-yellow-100">📍 Unité : {elem(@selected_unit, 0)},{elem(@selected_unit, 1)}</p>
-                <% end %>
+            <%!-- Selections panel --%>
+            <div class="bg-slate-800/50 rounded-xl p-4 border border-slate-700">
+              <h3 class="text-lg font-bold text-white mb-3">📋 Tes sélections</h3>
+              <div class="text-slate-300 text-sm space-y-1">
+                <p>Dé : {if @selected_dice, do: elem(@selected_dice, 0), else: "—"}</p>
+                <p>Unité : {if @selected_unit, do: inspect(@selected_unit), else: "—"}</p>
+                <p>Destination : {if @selected_destination, do: inspect(@selected_destination), else: "—"}</p>
               </div>
-            <% end %>
+            </div>
 
-            <%!-- Sélections adversaire --%>
-            <%= if @opponent_dice || @opponent_unit do %>
-              <div class="bg-orange-900/30 rounded-xl p-4 border border-orange-500/50">
-                <h3 class="text-lg font-bold text-orange-300 mb-2">Adversaire</h3>
-                <%= if @opponent_dice do %>
-                  <% {dice_value, _index} = @opponent_dice %>
-                  <p class="text-orange-100">🎲 Dé sélectionné : {dice_value}</p>
-                <% end %>
-                <%= if @opponent_unit do %>
-                  <p class="text-orange-100">📍 Unité : {elem(@opponent_unit, 0)},{elem(@opponent_unit, 1)}</p>
-                <% end %>
-              </div>
-            <% end %>
+            <%!-- Actions --%>
+            <div class="space-y-2">
+              <%= if @state.current_player == @player_number && @selected_dice && @selected_unit && @selected_destination do %>
+                <% {dice_value, _} = @selected_dice %>
+                <button
+                  phx-click="execute_action"
+                  class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-4 rounded-lg transition-all hover:scale-105 shadow-lg hover:shadow-green-500/50"
+                >
+                  ✅ Exécuter l'action (Dé {dice_value})
+                </button>
+              <% else %>
+                <button
+                  class="w-full bg-green-600/30 text-white font-bold py-3 px-4 rounded-lg opacity-50 cursor-not-allowed"
+                  disabled
+                >
+                  ✅ Exécuter l'action
+                </button>
+              <% end %>
+
+              <%= if @state.current_player == @player_number do %>
+                <button
+                  phx-click="pass"
+                  class="w-full bg-slate-600 hover:bg-slate-500 text-white font-bold py-2 px-4 rounded-lg transition"
+                >
+                  ⏭️ Passer le tour
+                </button>
+              <% else %>
+                <button class="w-full bg-slate-600/30 text-white font-bold py-2 px-4 rounded-lg opacity-50 cursor-not-allowed" disabled>
+                  ⏭️ Passer le tour
+                </button>
+              <% end %>
+            </div>
           </div>
 
-          <%!-- Colonne centrale : Plateau --%>
+          <%!-- Board and dice column --%>
           <div class="lg:col-span-2">
             <div class="bg-slate-800/50 rounded-xl p-6 border border-slate-700">
               <h3 class="text-xl font-bold text-white mb-4">Plateau 8x8</h3>
@@ -325,11 +366,14 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
                 <%= for row <- 1..8 do %>
                   <%= for col <- 1..8 do %>
                     <% position = {row, col} %>
-                    <% unit = case Board.get_unit(@state.board, position) do
-                      {:ok, u} -> u
-                      {:error, :no_unit} -> nil
-                    end %>
+                    <% unit =
+                      case Board.get_unit(@state.board, position) do
+                        {:ok, u} -> u
+                        _ -> nil
+                      end %>
                     <% is_selected = @selected_unit == position %>
+                    <% is_destination = @selected_destination == position %>
+                    <% is_reachable = position in @reachable_positions %>
                     <% is_opponent_selected = @opponent_unit == position %>
 
                     <button
@@ -340,6 +384,8 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
                       class={[
                         "aspect-square flex items-center justify-center text-2xl font-bold rounded transition-all",
                         is_selected && "ring-4 ring-yellow-400 scale-110 bg-yellow-500/20",
+                        is_destination && "ring-4 ring-green-400 scale-110 bg-green-500/20",
+                        is_reachable && "ring-2 ring-green-300 bg-green-500/10 hover:bg-green-400/20",
                         is_opponent_selected && "ring-2 ring-orange-400",
                         unit && "bg-slate-600 hover:bg-slate-500",
                         !unit && "bg-slate-700 hover:bg-slate-600",
@@ -353,7 +399,7 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
               </div>
             </div>
 
-            <%!-- Pool de dés --%>
+            <%!-- Dice pool --%>
             <div class="mt-6 bg-slate-800/50 rounded-xl p-6 border border-slate-700">
               <h3 class="text-xl font-bold text-white mb-4">Pool de dés</h3>
 
@@ -380,35 +426,10 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
                   <% end %>
                 </div>
               <% end %>
-
-              <%!-- Boutons d'action --%>
-              <div class="mt-6 flex gap-4 justify-center">
-                <%!-- Bouton Exécuter l'action - SEULEMENT pour le joueur actif --%>
-                <%= if @state.current_player == @player_number && @selected_dice && @selected_unit do %>
-                  <% {dice_value, _index} = @selected_dice %>
-                  <button
-                    phx-click="execute_action"
-                    class="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-8 rounded-lg transition-all hover:scale-105 shadow-lg hover:shadow-green-500/50"
-                  >
-                    ✅ Exécuter l'action (Dé {dice_value})
-                  </button>
-                <% end %>
-
-                <%!-- Bouton Pass - SEULEMENT pour le joueur actif --%>
-                <%= if @state.current_player == @player_number do %>
-                  <button
-                    phx-click="pass"
-                    class="bg-slate-600 hover:bg-slate-500 text-white font-bold py-3 px-8 rounded-lg transition"
-                  >
-                    ⏭️ Passer le tour
-                  </button>
-                <% end %>
-              </div>
             </div>
           </div>
         </div>
 
-        <%!-- Retour --%>
         <div class="text-center mt-8">
           <a href="/coral-wars" class="text-slate-400 hover:text-cyan-400 transition">
             ← Retour au lobby
@@ -419,7 +440,7 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
     """
   end
 
-  # Fonction helper pour afficher une unité
+  # --- Unit rendering (emojis) ---
   defp render_unit(nil), do: ""
   defp render_unit(%Unit{type: :baby, player: 1}), do: "🐬"
   defp render_unit(%Unit{type: :baby, player: 2}), do: "🦈"
