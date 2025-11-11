@@ -79,6 +79,14 @@ defmodule Onirigate.Games.CoralWars.GameServer do
     )
   end
 
+  def execute_charge(game_id, player_id, dice_value, from_pos, direction) do
+    GenServer.call(
+      via(game_id),
+      {:execute_charge, player_id, dice_value, from_pos, direction},
+      5000
+    )
+  end
+
   # Permet à un joueur de passer son tour
   def pass_turn(game_id, player_id) do
     GenServer.call(via(game_id), {:pass_turn, player_id}, 5000)
@@ -293,6 +301,36 @@ defmodule Onirigate.Games.CoralWars.GameServer do
       end
     else
       # Pas le tour du joueur
+      {:reply, {:error, :not_your_turn}, state}
+    end
+  end
+
+  @impl true
+  def handle_call(
+        {:execute_charge, player_id, dice_value, from_pos, direction},
+        _from,
+        state
+      ) do
+    player_number = state.players[player_id]
+
+    if player_number == state.state.current_player do
+      case GameLogic.charge(state.state, from_pos, direction, dice_value) do
+        {:ok, new_game_state} ->
+          case GameLogic.check_victory(new_game_state) do
+            {:winner, winner} ->
+              final_state = %{new_game_state | phase: :finished, winner: winner}
+              broadcast_game_update(state.game_id, final_state)
+              {:reply, {:ok, final_state}, %{state | state: final_state}}
+
+            :continue ->
+              broadcast_game_update(state.game_id, new_game_state)
+              {:reply, {:ok, new_game_state}, %{state | state: new_game_state}}
+          end
+
+        {:error, reason} ->
+          {:reply, {:error, reason}, state}
+      end
+    else
       {:reply, {:error, :not_your_turn}, state}
     end
   end

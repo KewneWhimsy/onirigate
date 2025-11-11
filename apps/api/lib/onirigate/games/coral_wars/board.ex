@@ -110,6 +110,36 @@ defmodule Onirigate.Games.CoralWars.Board do
   end
 
   @doc """
+  Charge : déplace une unité de 1 case orthogonalement dans une direction
+  ET attaque un ennemi qui se trouve dans cette même direction.
+  Retourne {:ok, new_board} ou {:error, reason}.
+  """
+  def charge_unit(board, from_pos, {dr, dc}) do
+    {from_row, from_col} = from_pos
+    # Case de destination (1 case dans la direction)
+    to_pos = {from_row + dr, from_col + dc}
+    # Case de la cible (dans la même direction, juste après)
+    target_pos = {from_row + 2 * dr, from_col + 2 * dc}
+
+    with {:ok, charging_unit} <- get_unit(board, from_pos),
+         true <- valid_position?(to_pos),
+         true <- is_nil(board[to_pos]),
+         true <- valid_position?(target_pos),
+         {:ok, _target} <- get_unit(board, target_pos) do
+      # 1️⃣ Déplacer l'unité chargante
+      board_after_move =
+        board
+        |> Map.put(from_pos, nil)
+        |> Map.put(to_pos, charging_unit)
+
+      # 2️⃣ Attaquer la cible
+      attack_unit(board_after_move, target_pos)
+    else
+      _ -> {:error, :charge_failed}
+    end
+  end
+
+  @doc """
   Récupère une unité à une position
   """
   def get_unit(board, position) do

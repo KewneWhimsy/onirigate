@@ -422,6 +422,43 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
               {:noreply,
                put_flash(socket, :error, "Intimidation impossible : #{inspect(reason)}")}
           end
+
+        :charge ->
+          # Pour CHARGE, to_pos est l'ennemi qu'on veut attaquer
+          # On doit calculer la direction et vérifier que la case intermédiaire est vide
+          dr = to_row - from_row
+          dc = to_col - from_col
+
+          # Normaliser la direction (doit être -1, 0 ou 1)
+          direction = {div(dr, max(abs(dr), 1)), div(dc, max(abs(dc), 1))}
+
+          case GameServer.execute_charge(
+                 socket.assigns.room_id,
+                 socket.assigns.player_id,
+                 dice_value,
+                 from_pos,
+                 direction
+               ) do
+            {:ok, _} ->
+              GameServer.notify_selection(
+                socket.assigns.room_id,
+                socket.assigns.player_id,
+                :clear,
+                nil
+              )
+
+              {:noreply,
+               assign(socket,
+                 selected_dice: nil,
+                 selected_unit: nil,
+                 selected_destination: nil,
+                 reachable_positions: [],
+                 action_type: :move
+               )}
+
+            {:error, reason} ->
+              {:noreply, put_flash(socket, :error, "Charge impossible : #{inspect(reason)}")}
+          end
       end
     else
       {:noreply, put_flash(socket, :error, "Sélectionne : dé → unité → destination")}
@@ -594,6 +631,36 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
         end
       end)
       |> Enum.reverse()
+    end)
+  end
+
+  # Pour CHARGE → ennemis adjacents orthogonalement (on clique sur l'ennemi, pas la case intermédiaire)
+  defp compute_reachable_positions({row, col}, dice_value, :charge, board, player_number)
+       when dice_value == 6 do
+    # Directions orthogonales uniquement
+    directions = [{-1, 0}, {1, 0}, {0, -1}, {0, 1}]
+
+    Enum.flat_map(directions, fn {dr, dc} ->
+      # Case intermédiaire (où l'unité va se déplacer)
+      intermediate = {row + dr, col + dc}
+      # Case de l'ennemi (2 cases dans la direction)
+      enemy_pos = {row + 2 * dr, col + 2 * dc}
+      {enemy_row, enemy_col} = enemy_pos
+
+      # Vérifier que la case intermédiaire est vide
+      # ET qu'il y a un ennemi à la position cible
+      if enemy_row in 1..8 and enemy_col in 1..8 and is_nil(board[intermediate]) do
+        case board[enemy_pos] do
+          %Unit{player: enemy_player} when enemy_player != player_number ->
+            # On retourne la position de l'ENNEMI (pas la case intermédiaire)
+            [enemy_pos]
+
+          _ ->
+            []
+        end
+      else
+        []
+      end
     end)
   end
 

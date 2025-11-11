@@ -288,6 +288,57 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
     end
   end
 
+  @doc """
+  Exécute une action CHARGE (dé 6)
+  Déplace de 1 case orthogonalement ET attaque un ennemi dans cette direction.
+  """
+  def charge(state, from_pos, direction, dice_value) do
+    with {:ok, unit} <- Board.get_unit(state.board, from_pos),
+         :ok <- validate_charge(state, unit, from_pos, direction, dice_value),
+         {:ok, new_board} <- Board.charge_unit(state.board, from_pos, direction) do
+      # La case de destination après le mouvement
+      {from_row, from_col} = from_pos
+      {dr, dc} = direction
+      to_pos = {from_row + dr, from_col + dc}
+
+      # Marquer l'unité comme activée
+      activated_unit = %{new_board[to_pos] | activated: true}
+      final_board = Map.put(new_board, to_pos, activated_unit)
+
+      # Retirer le dé du pool
+      new_pool = List.delete(state.dice_pool, dice_value)
+
+      new_state = %{
+        state
+        | board: final_board,
+          dice_pool: new_pool
+      }
+
+      # Changer de joueur
+      new_state = change_player(new_state)
+      {:ok, new_state}
+    end
+  end
+
+  defp validate_charge(state, unit, from_pos, direction, dice_value) do
+    {dr, dc} = direction
+    {from_row, from_col} = from_pos
+    # Case de destination
+    to_pos = {from_row + dr, from_col + dc}
+    # Case de la cible à attaquer
+    target_pos = {from_row + 2 * dr, from_col + 2 * dc}
+
+    with :ok <- check_dice_value(dice_value, [6]),
+         :ok <- check_dice_in_pool(state.dice_pool, dice_value),
+         :ok <- check_unit_can_activate(unit),
+         :ok <- check_unit_belongs_to_player(unit, state.current_player),
+         :ok <- check_push_direction_valid(direction),
+         :ok <- check_path_clear(state.board, to_pos),
+         :ok <- check_target_is_enemy(state.board, target_pos, state.current_player) do
+      :ok
+    end
+  end
+
   # ========== VALIDATIONS COMMUNES ==========
 
   defp check_dice_value(dice_value, allowed_values) do
@@ -356,12 +407,6 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
   defp change_player(state) do
     next_player = if state.current_player == 1, do: 2, else: 1
     %{state | current_player: next_player}
-  end
-
-  # ========== ACTIONS À IMPLÉMENTER (stubs) ==========
-
-  def charge(_state, _from_pos, _direction, _dice_value) do
-    {:error, :not_implemented}
   end
 
   # ========== VÉRIFICATION DE VICTOIRE ==========
