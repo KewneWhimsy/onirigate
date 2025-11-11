@@ -84,7 +84,7 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
          :ok <- check_unit_can_activate(unit),
          :ok <- check_unit_belongs_to_player(unit, state.current_player),
          :ok <- check_not_same_position(from_pos, to_pos),
-         :ok <- check_distance(from_pos, to_pos, dice_value),
+         :ok <- check_distance(from_pos, to_pos, 3),
          :ok <- check_path_clear(state.board, to_pos) do
       :ok
     end

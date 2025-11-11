@@ -41,37 +41,32 @@ defmodule Onirigate.Games.CoralWars.Board do
   end
 
   @doc """
-  Déplace une unité de 1 case et pousse une unité adjacente de 1 case dans la direction opposée.
+  Déplace une unité de 1 case et pousse une unité adjacente de 1 case dans la même direction.
   Retourne {:ok, new_board} ou {:error, reason}.
   """
   def push_unit(board, from_pos, {dr, dc}) do
     {from_row, from_col} = from_pos
     push_pos = {from_row + dr, from_col + dc}
-    target_pos = {from_row + 2*dr, from_col + 2*dc}
+    target_pos = {from_row + 2 * dr, from_col + 2 * dc}
 
     with {:ok, pushing_unit} <- get_unit(board, from_pos),
          {:ok, pushed_unit} <- get_unit(board, push_pos),
          true <- valid_position?(target_pos),
          true <- is_nil(board[target_pos]) do
-
-      # 1. Déplace l'unité qui pousse vers push_pos
-      board =
+      new_board =
         board
+        # 1️⃣ Supprime l'unité pousseuse de sa case d'origine
         |> Map.put(from_pos, nil)
+        # 2️⃣ Déplace la cible d'une case
+        |> Map.put(target_pos, pushed_unit)
+        # 3️⃣ Déplace ensuite le pousseur sur l'ancienne case de la cible
         |> Map.put(push_pos, pushing_unit)
 
-      # 2. Déplace l'unité poussée vers target_pos
-      board =
-        board
-        |> Map.put(push_pos, nil)
-        |> Map.put(target_pos, pushed_unit)
-
-      {:ok, board}
+      {:ok, new_board}
     else
       _ -> {:error, :push_failed}
     end
   end
-
 
   @doc """
   Récupère une unité à une position
