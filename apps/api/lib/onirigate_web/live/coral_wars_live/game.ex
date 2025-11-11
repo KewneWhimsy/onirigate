@@ -37,7 +37,11 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
               selected_destination: nil,
               reachable_positions: [],
               opponent_dice: nil,
-              opponent_unit: nil
+              opponent_unit: nil,
+              show_dice_roller: false,
+              pending_roll: nil,
+              roll_result: nil,
+              roll_message: nil
             )
 
           {:ok, socket}
@@ -289,7 +293,7 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
     end
   end
 
-  # 4️⃣ Exécuter l'action (move/push/attack)
+  # 4️⃣ Exécuter l'action (move/push/attack/intimidate/charge)
   @impl true
   def handle_event("execute_action", _params, socket) do
     selected_dice = socket.assigns.selected_dice
@@ -302,166 +306,172 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
       to_pos = selected_destination
       {from_row, from_col} = from_pos
       {to_row, to_col} = to_pos
+
+      # Calculer la direction pour push/charge
       dr = to_row - from_row
       dc = to_col - from_col
+      direction = {div(dr, max(abs(dr), 1)), div(dc, max(abs(dc), 1))}
 
-      case socket.assigns.action_type do
-        :move ->
-          case GameServer.execute_move(
-                 socket.assigns.room_id,
-                 socket.assigns.player_id,
-                 dice_value,
-                 from_pos,
-                 to_pos
-               ) do
-            {:ok, _} ->
-              GameServer.notify_selection(
-                socket.assigns.room_id,
-                socket.assigns.player_id,
-                :clear,
-                nil
-              )
+      # Exécuter l'action selon le type
+      result =
+        case socket.assigns.action_type do
+          :move ->
+            GameServer.execute_move(
+              socket.assigns.room_id,
+              socket.assigns.player_id,
+              dice_value,
+              from_pos,
+              to_pos
+            )
 
-              {:noreply,
-               assign(socket,
-                 selected_dice: nil,
-                 selected_unit: nil,
-                 selected_destination: nil,
-                 reachable_positions: [],
-                 action_type: :move
-               )}
+          :push ->
+            GameServer.execute_push(
+              socket.assigns.room_id,
+              socket.assigns.player_id,
+              dice_value,
+              from_pos,
+              {dr, dc}
+            )
 
-            {:error, reason} ->
-              {:noreply, put_flash(socket, :error, "Action impossible : #{inspect(reason)}")}
-          end
+          :attack ->
+            GameServer.execute_attack(
+              socket.assigns.room_id,
+              socket.assigns.player_id,
+              dice_value,
+              from_pos,
+              to_pos
+            )
 
-        :push ->
-          case GameServer.execute_push(
-                 socket.assigns.room_id,
-                 socket.assigns.player_id,
-                 dice_value,
-                 from_pos,
-                 {dr, dc}
-               ) do
-            {:ok, _} ->
-              GameServer.notify_selection(
-                socket.assigns.room_id,
-                socket.assigns.player_id,
-                :clear,
-                nil
-              )
+          :intimidate ->
+            GameServer.execute_intimidate(
+              socket.assigns.room_id,
+              socket.assigns.player_id,
+              dice_value,
+              from_pos,
+              to_pos
+            )
 
-              {:noreply,
-               assign(socket,
-                 selected_dice: nil,
-                 selected_unit: nil,
-                 selected_destination: nil,
-                 reachable_positions: [],
-                 action_type: :move
-               )}
+          :charge ->
+            GameServer.execute_charge(
+              socket.assigns.room_id,
+              socket.assigns.player_id,
+              dice_value,
+              from_pos,
+              direction
+            )
+        end
 
-            {:error, reason} ->
-              {:noreply, put_flash(socket, :error, "Action impossible : #{inspect(reason)}")}
-          end
+      # Gérer les 3 cas possibles
+      case result do
+        # ✅ Action réussie directement
+        {:ok, _new_state} ->
+          GameServer.notify_selection(
+            socket.assigns.room_id,
+            socket.assigns.player_id,
+            :clear,
+            nil
+          )
 
-        :attack ->
-          case GameServer.execute_attack(
-                 socket.assigns.room_id,
-                 socket.assigns.player_id,
-                 dice_value,
-                 from_pos,
-                 to_pos
-               ) do
-            {:ok, _} ->
-              GameServer.notify_selection(
-                socket.assigns.room_id,
-                socket.assigns.player_id,
-                :clear,
-                nil
-              )
+          {:noreply,
+           assign(socket,
+             selected_dice: nil,
+             selected_unit: nil,
+             selected_destination: nil,
+             reachable_positions: [],
+             action_type: :move
+           )}
 
-              {:noreply,
-               assign(socket,
-                 selected_dice: nil,
-                 selected_unit: nil,
-                 selected_destination: nil,
-                 reachable_positions: [],
-                 action_type: :move
-               )}
+        # 🎲 Un jet de dés est nécessaire
+        {:requires_roll, pending_roll} ->
+          # Message selon le type de jet
+          message =
+            case pending_roll.type do
+              :intimidation ->
+                "😱 Votre unité est intimidée ! Lancez le dé : 4+ pour réussir l'action"
 
-            {:error, reason} ->
-              {:noreply, put_flash(socket, :error, "Attaque impossible : #{inspect(reason)}")}
-          end
+              :control_zone ->
+                "⚠️ Vous quittez une zone de contrôle ennemie ! Lancez le dé : 4+ pour vous échapper"
+            end
 
-        :intimidate ->
-          case GameServer.execute_intimidate(
-                 socket.assigns.room_id,
-                 socket.assigns.player_id,
-                 dice_value,
-                 from_pos,
-                 to_pos
-               ) do
-            {:ok, _} ->
-              GameServer.notify_selection(
-                socket.assigns.room_id,
-                socket.assigns.player_id,
-                :clear,
-                nil
-              )
+          # Afficher le dice roller
+          {:noreply,
+           assign(socket,
+             show_dice_roller: true,
+             pending_roll: pending_roll,
+             roll_result: nil,
+             roll_message: message,
+             rolling: false
+           )}
 
-              {:noreply,
-               assign(socket,
-                 selected_dice: nil,
-                 selected_unit: nil,
-                 selected_destination: nil,
-                 reachable_positions: [],
-                 action_type: :move
-               )}
+        # ❌ Erreur
+        {:error, reason} ->
+          error_msg =
+            case socket.assigns.action_type do
+              :move -> "Mouvement impossible"
+              :push -> "Push impossible"
+              :attack -> "Attaque impossible"
+              :intimidate -> "Intimidation impossible"
+              :charge -> "Charge impossible"
+            end
 
-            {:error, reason} ->
-              {:noreply,
-               put_flash(socket, :error, "Intimidation impossible : #{inspect(reason)}")}
-          end
-
-        :charge ->
-          # Pour CHARGE, to_pos est l'ennemi qu'on veut attaquer
-          # On doit calculer la direction et vérifier que la case intermédiaire est vide
-          dr = to_row - from_row
-          dc = to_col - from_col
-
-          # Normaliser la direction (doit être -1, 0 ou 1)
-          direction = {div(dr, max(abs(dr), 1)), div(dc, max(abs(dc), 1))}
-
-          case GameServer.execute_charge(
-                 socket.assigns.room_id,
-                 socket.assigns.player_id,
-                 dice_value,
-                 from_pos,
-                 direction
-               ) do
-            {:ok, _} ->
-              GameServer.notify_selection(
-                socket.assigns.room_id,
-                socket.assigns.player_id,
-                :clear,
-                nil
-              )
-
-              {:noreply,
-               assign(socket,
-                 selected_dice: nil,
-                 selected_unit: nil,
-                 selected_destination: nil,
-                 reachable_positions: [],
-                 action_type: :move
-               )}
-
-            {:error, reason} ->
-              {:noreply, put_flash(socket, :error, "Charge impossible : #{inspect(reason)}")}
-          end
+          {:noreply, put_flash(socket, :error, "#{error_msg} : #{inspect(reason)}")}
       end
     else
       {:noreply, put_flash(socket, :error, "Sélectionne : dé → unité → destination")}
+    end
+  end
+
+  # 🎲 Lancer le dé (génère le résultat côté serveur)
+  @impl true
+  def handle_event("roll_dice", _, socket) do
+    # Important : Le résultat est généré côté serveur pour éviter la triche
+    roll_result = Enum.random(1..6)
+
+    {:noreply,
+     assign(socket,
+       roll_result: roll_result,
+       rolling: true
+     )
+     |> push_event("animate-dice", %{result: roll_result})}
+  end
+
+  # ✅ Confirmer le résultat du jet
+  @impl true
+  def handle_event("confirm_roll", _, socket) do
+    case GameServer.resolve_dice_roll(
+           socket.assigns.room_id,
+           socket.assigns.player_id,
+           socket.assigns.roll_result
+         ) do
+      {:ok, _new_state} ->
+        # Nettoyer l'interface
+        GameServer.notify_selection(
+          socket.assigns.room_id,
+          socket.assigns.player_id,
+          :clear,
+          nil
+        )
+
+        {:noreply,
+         assign(socket,
+           show_dice_roller: false,
+           pending_roll: nil,
+           roll_result: nil,
+           roll_message: nil,
+           rolling: false,
+           # Reset des sélections
+           selected_dice: nil,
+           selected_unit: nil,
+           selected_destination: nil,
+           reachable_positions: [],
+           action_type: :move
+         )}
+
+      {:error, reason} ->
+        {:noreply,
+         socket
+         |> put_flash(:error, "Erreur lors de la résolution : #{inspect(reason)}")
+         |> assign(show_dice_roller: false)}
     end
   end
 
@@ -900,7 +910,88 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
           </a>
         </div>
       </div>
+      <%= render_dice_roller(assigns) %>
     </div>
+    """
+  end
+
+  defp render_dice_roller(assigns) do
+    ~H"""
+    <%= if @show_dice_roller do %>
+      <div
+        class="fixed inset-0 bg-black/70 flex items-center justify-center z-50"
+        id="dice-roller-overlay"
+      >
+        <div class="dice-roller-popover bg-gradient-to-br from-slate-900 to-slate-800 border-2 border-cyan-500 rounded-2xl p-8 shadow-2xl max-w-md">
+          <h3 class="text-2xl font-bold text-cyan-300 mb-4 text-center">
+            {case @pending_roll.type do
+              :intimidation -> "😱 Intimidation !"
+              :control_zone -> "⚠️ Zone de Contrôle !"
+            end}
+          </h3>
+
+          <p class="text-slate-300 text-center mb-2">{@roll_message}</p>
+          <p class="text-sm text-slate-400 text-center mb-6">
+            Résultat ≥ 4 : Succès | &lt; 4 : Échec
+          </p>
+
+          <!-- Dé 3D -->
+          <div
+            id="dice-3d"
+            phx-hook="DiceRoller"
+            class={"dice-3d #{if @rolling, do: "rolling", else: ""}"}
+          >
+            <div class="dice-face dice-face-1">⚀</div>
+            <div class="dice-face dice-face-2">⚁</div>
+            <div class="dice-face dice-face-3">⚂</div>
+            <div class="dice-face dice-face-4">⚃</div>
+            <div class="dice-face dice-face-5">⚄</div>
+            <div class="dice-face dice-face-6">⚅</div>
+          </div>
+
+          <%= if @roll_result do %>
+            <div class="text-center mt-6">
+              <p class={[
+                "text-4xl font-bold mb-4",
+                @roll_result >= 4 && "text-green-400",
+                @roll_result < 4 && "text-red-400"
+              ]}>
+                🎲 {case @roll_result do
+                  1 -> "⚀"
+                  2 -> "⚁"
+                  3 -> "⚂"
+                  4 -> "⚃"
+                  5 -> "⚄"
+                  6 -> "⚅"
+                end} = {@roll_result}
+              </p>
+              <p class={[
+                "text-lg mb-4",
+                @roll_result >= 4 && "text-green-300",
+                @roll_result < 4 && "text-red-300"
+              ]}>
+                {if @roll_result >= 4, do: "✅ Succès !", else: "❌ Échec..."}
+              </p>
+              <button
+                phx-click="confirm_roll"
+                class="w-full bg-cyan-500 hover:bg-cyan-600 text-white font-bold py-3 px-6 rounded-lg transition-all hover:scale-105"
+              >
+                Continuer
+              </button>
+            </div>
+          <% else %>
+            <div class="text-center mt-6">
+              <button
+                phx-click="roll_dice"
+                class="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-600 hover:to-blue-700 text-white font-bold py-4 px-6 rounded-xl transition-all hover:scale-105 shadow-lg"
+              >
+                🎲 Lancer le dé
+              </button>
+            </div>
+          <% end %>
+        </div>
+      </div>
+    <% end %>
     """
   end
 

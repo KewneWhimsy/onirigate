@@ -79,12 +79,22 @@ defmodule Onirigate.Games.CoralWars.GameServer do
     )
   end
 
+  @doc """
+  Exécute une action CHARGE
+  """
   def execute_charge(game_id, player_id, dice_value, from_pos, direction) do
     GenServer.call(
       via(game_id),
       {:execute_charge, player_id, dice_value, from_pos, direction},
       5000
     )
+  end
+
+  @doc """
+  Résout un jet de dés en attente
+  """
+  def resolve_dice_roll(game_id, player_id, roll_result) do
+    GenServer.call(via(game_id), {:resolve_dice_roll, player_id, roll_result}, 5000)
   end
 
   # Permet à un joueur de passer son tour
@@ -172,168 +182,205 @@ defmodule Onirigate.Games.CoralWars.GameServer do
   end
 
   @impl true
-  # Gère l'appel pour exécuter un mouvement
-  def handle_call({:execute_move, player_id, dice_value, from_pos, to_pos}, _from, state) do
-    # Récupère le numéro du joueur
-    player_number = state.players[player_id]
-    # Vérifie que c'est bien son tour
-    if player_number == state.state.current_player do
-      case GameLogic.move(state.state, from_pos, to_pos, dice_value) do
-        # Mouvement réussi
-        {:ok, new_game_state} ->
-          # Vérifie si la partie est gagnée
-          case GameLogic.check_victory(new_game_state) do
-            # Partie terminée
-            {:winner, winner} ->
-              final_state = %{new_game_state | phase: :finished, winner: winner}
-              # Notifie tous les joueurs
-              broadcast_game_update(state.game_id, final_state)
-              {:reply, {:ok, final_state}, %{state | state: final_state}}
+def handle_call({:execute_move, player_id, dice_value, from_pos, to_pos}, _from, state) do
+  player_number = state.players[player_id]
 
-            # Partie continue
-            :continue ->
-              broadcast_game_update(state.game_id, new_game_state)
-              {:reply, {:ok, new_game_state}, %{state | state: new_game_state}}
-          end
+  if player_number == state.state.current_player do
+    # ✅ VÉRIFIER si un jet de dés est nécessaire
+    case GameLogic.check_action_requirements(
+      state.state,
+      :move,
+      from_pos,
+      %{to_pos: to_pos, dice_value: dice_value}
+    ) do
+      {:requires_roll, pending_roll} ->
+        # 🎲 Mettre en attente et demander un jet
+        new_state = Map.put(state.state, :pending_roll, pending_roll)
+        broadcast_game_update(state.game_id, new_state)
+        {:reply, {:requires_roll, pending_roll}, %{state | state: new_state}}
 
-        # Mouvement impossible
-        {:error, reason} ->
-          {:reply, {:error, reason}, state}
-      end
-    else
-      # Pas le tour du joueur
-      {:reply, {:error, :not_your_turn}, state}
+      :ok ->
+        # ✅ Exécuter directement
+        case GameLogic.move(state.state, from_pos, to_pos, dice_value) do
+          {:ok, new_game_state} ->
+            case GameLogic.check_victory(new_game_state) do
+              {:winner, winner} ->
+                final_state = %{new_game_state | phase: :finished, winner: winner}
+                broadcast_game_update(state.game_id, final_state)
+                {:reply, {:ok, final_state}, %{state | state: final_state}}
+
+              :continue ->
+                broadcast_game_update(state.game_id, new_game_state)
+                {:reply, {:ok, new_game_state}, %{state | state: new_game_state}}
+            end
+
+          {:error, reason} ->
+            {:reply, {:error, reason}, state}
+        end
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
+  else
+    {:reply, {:error, :not_your_turn}, state}
   end
+end
 
-  @impl true
-  # Gère l'appel pour pousser une unité
-  def handle_call({:execute_push, player_id, dice_value, from_pos, direction}, _from, state) do
-    # Récupère le numéro du joueur
-    player_number = state.players[player_id]
-    # Vérifie que c'est bien son tour
-    if player_number == state.state.current_player do
-      case GameLogic.push(state.state, from_pos, direction, dice_value) do
-        # Push réussi
-        {:ok, new_game_state} ->
-          # Vérifie si la partie est gagnée
-          case GameLogic.check_victory(new_game_state) do
-            # Partie terminée
-            {:winner, winner} ->
-              final_state = %{new_game_state | phase: :finished, winner: winner}
-              broadcast_game_update(state.game_id, final_state)
-              {:reply, {:ok, final_state}, %{state | state: final_state}}
+@impl true
+def handle_call({:execute_push, player_id, dice_value, from_pos, direction}, _from, state) do
+  player_number = state.players[player_id]
 
-            # Partie continue
-            :continue ->
-              broadcast_game_update(state.game_id, new_game_state)
-              {:reply, {:ok, new_game_state}, %{state | state: new_game_state}}
-          end
+  if player_number == state.state.current_player do
+    # ✅ VÉRIFIER si un jet de dés est nécessaire (intimidation uniquement)
+    case GameLogic.check_action_requirements(
+      state.state,
+      :push,
+      from_pos,
+      %{direction: direction, dice_value: dice_value}
+    ) do
+      {:requires_roll, pending_roll} ->
+        new_state = Map.put(state.state, :pending_roll, pending_roll)
+        broadcast_game_update(state.game_id, new_state)
+        {:reply, {:requires_roll, pending_roll}, %{state | state: new_state}}
 
-        # Push impossible
-        {:error, reason} ->
-          {:reply, {:error, reason}, state}
-      end
-    else
-      # Pas le tour du joueur
-      {:reply, {:error, :not_your_turn}, state}
+      :ok ->
+        case GameLogic.push(state.state, from_pos, direction, dice_value) do
+          {:ok, new_game_state} ->
+            case GameLogic.check_victory(new_game_state) do
+              {:winner, winner} ->
+                final_state = %{new_game_state | phase: :finished, winner: winner}
+                broadcast_game_update(state.game_id, final_state)
+                {:reply, {:ok, final_state}, %{state | state: final_state}}
+
+              :continue ->
+                broadcast_game_update(state.game_id, new_game_state)
+                {:reply, {:ok, new_game_state}, %{state | state: new_game_state}}
+            end
+
+          {:error, reason} ->
+            {:reply, {:error, reason}, state}
+        end
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
+  else
+    {:reply, {:error, :not_your_turn}, state}
   end
+end
 
-  @impl true
-  def handle_call({:execute_attack, player_id, dice_value, from_pos, target_pos}, _from, state) do
-    player_number = state.players[player_id]
+@impl true
+def handle_call({:execute_attack, player_id, dice_value, from_pos, target_pos}, _from, state) do
+  player_number = state.players[player_id]
 
-    if player_number == state.state.current_player do
-      case GameLogic.attack(state.state, from_pos, target_pos, dice_value) do
-        {:ok, new_game_state} ->
-          case GameLogic.check_victory(new_game_state) do
-            {:winner, winner} ->
-              final_state = %{new_game_state | phase: :finished, winner: winner}
-              broadcast_game_update(state.game_id, final_state)
-              {:reply, {:ok, final_state}, %{state | state: final_state}}
+  if player_number == state.state.current_player do
+    # ✅ VÉRIFIER si un jet de dés est nécessaire (intimidation uniquement)
+    case GameLogic.check_action_requirements(
+      state.state,
+      :attack,
+      from_pos,
+      %{target_pos: target_pos, dice_value: dice_value}
+    ) do
+      {:requires_roll, pending_roll} ->
+        new_state = Map.put(state.state, :pending_roll, pending_roll)
+        broadcast_game_update(state.game_id, new_state)
+        {:reply, {:requires_roll, pending_roll}, %{state | state: new_state}}
 
-            :continue ->
-              broadcast_game_update(state.game_id, new_game_state)
-              {:reply, {:ok, new_game_state}, %{state | state: new_game_state}}
-          end
+      :ok ->
+        case GameLogic.attack(state.state, from_pos, target_pos, dice_value) do
+          {:ok, new_game_state} ->
+            case GameLogic.check_victory(new_game_state) do
+              {:winner, winner} ->
+                final_state = %{new_game_state | phase: :finished, winner: winner}
+                broadcast_game_update(state.game_id, final_state)
+                {:reply, {:ok, final_state}, %{state | state: final_state}}
 
-        {:error, reason} ->
-          {:reply, {:error, reason}, state}
-      end
-    else
-      {:reply, {:error, :not_your_turn}, state}
+              :continue ->
+                broadcast_game_update(state.game_id, new_game_state)
+                {:reply, {:ok, new_game_state}, %{state | state: new_game_state}}
+            end
+
+          {:error, reason} ->
+            {:reply, {:error, reason}, state}
+        end
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
+  else
+    {:reply, {:error, :not_your_turn}, state}
   end
+end
 
-  @impl true
-  # Gère l'appel pour intimider une unité
-  def handle_call(
-        {:execute_intimidate, player_id, dice_value, from_pos, target_pos},
-        _from,
-        state
-      ) do
-    # Récupère le numéro du joueur
-    player_number = state.players[player_id]
+@impl true
+def handle_call({:execute_intimidate, player_id, dice_value, from_pos, target_pos}, _from, state) do
+  player_number = state.players[player_id]
 
-    # Vérifie que c'est bien son tour
-    if player_number == state.state.current_player do
-      case GameLogic.intimidate(state.state, from_pos, target_pos, dice_value) do
-        # Intimidation réussie
-        {:ok, new_game_state} ->
-          # Vérifie si la partie est gagnée
-          case GameLogic.check_victory(new_game_state) do
-            # Partie terminée
-            {:winner, winner} ->
-              final_state = %{new_game_state | phase: :finished, winner: winner}
-              broadcast_game_update(state.game_id, final_state)
-              {:reply, {:ok, final_state}, %{state | state: final_state}}
+  if player_number == state.state.current_player do
+    # Intimidation ne nécessite pas de jet (c'est l'action qui pose le token)
+    case GameLogic.intimidate(state.state, from_pos, target_pos, dice_value) do
+      {:ok, new_game_state} ->
+        case GameLogic.check_victory(new_game_state) do
+          {:winner, winner} ->
+            final_state = %{new_game_state | phase: :finished, winner: winner}
+            broadcast_game_update(state.game_id, final_state)
+            {:reply, {:ok, final_state}, %{state | state: final_state}}
 
-            # Partie continue
-            :continue ->
-              broadcast_game_update(state.game_id, new_game_state)
-              {:reply, {:ok, new_game_state}, %{state | state: new_game_state}}
-          end
+          :continue ->
+            broadcast_game_update(state.game_id, new_game_state)
+            {:reply, {:ok, new_game_state}, %{state | state: new_game_state}}
+        end
 
-        # Intimidation impossible
-        {:error, reason} ->
-          {:reply, {:error, reason}, state}
-      end
-    else
-      # Pas le tour du joueur
-      {:reply, {:error, :not_your_turn}, state}
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
+  else
+    {:reply, {:error, :not_your_turn}, state}
   end
+end
 
-  @impl true
-  def handle_call(
-        {:execute_charge, player_id, dice_value, from_pos, direction},
-        _from,
-        state
-      ) do
-    player_number = state.players[player_id]
+@impl true
+def handle_call({:execute_charge, player_id, dice_value, from_pos, direction}, _from, state) do
+  player_number = state.players[player_id]
 
-    if player_number == state.state.current_player do
-      case GameLogic.charge(state.state, from_pos, direction, dice_value) do
-        {:ok, new_game_state} ->
-          case GameLogic.check_victory(new_game_state) do
-            {:winner, winner} ->
-              final_state = %{new_game_state | phase: :finished, winner: winner}
-              broadcast_game_update(state.game_id, final_state)
-              {:reply, {:ok, final_state}, %{state | state: final_state}}
+  if player_number == state.state.current_player do
+    # ✅ VÉRIFIER si un jet de dés est nécessaire (intimidation uniquement)
+    case GameLogic.check_action_requirements(
+      state.state,
+      :charge,
+      from_pos,
+      %{direction: direction, dice_value: dice_value}
+    ) do
+      {:requires_roll, pending_roll} ->
+        new_state = Map.put(state.state, :pending_roll, pending_roll)
+        broadcast_game_update(state.game_id, new_state)
+        {:reply, {:requires_roll, pending_roll}, %{state | state: new_state}}
 
-            :continue ->
-              broadcast_game_update(state.game_id, new_game_state)
-              {:reply, {:ok, new_game_state}, %{state | state: new_game_state}}
-          end
+      :ok ->
+        case GameLogic.charge(state.state, from_pos, direction, dice_value) do
+          {:ok, new_game_state} ->
+            case GameLogic.check_victory(new_game_state) do
+              {:winner, winner} ->
+                final_state = %{new_game_state | phase: :finished, winner: winner}
+                broadcast_game_update(state.game_id, final_state)
+                {:reply, {:ok, final_state}, %{state | state: final_state}}
 
-        {:error, reason} ->
-          {:reply, {:error, reason}, state}
-      end
-    else
-      {:reply, {:error, :not_your_turn}, state}
+              :continue ->
+                broadcast_game_update(state.game_id, new_game_state)
+                {:reply, {:ok, new_game_state}, %{state | state: new_game_state}}
+            end
+
+          {:error, reason} ->
+            {:reply, {:error, reason}, state}
+        end
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
+  else
+    {:reply, {:error, :not_your_turn}, state}
   end
+end
 
   @impl true
   # Gère l'appel pour passer son tour

@@ -103,3 +103,85 @@
 [data-phx-session], [data-phx-teleported-src] { display: contents }
 
 /* This file is for your main application CSS */
+
+/* ========================================
+   🎲 DICE ROLLER 3D STYLES
+   ======================================== */
+
+/* Container du dé */
+.dice-3d {
+  width: 120px;
+  height: 120px;
+  margin: 2rem auto;
+  position: relative;
+  transform-style: preserve-3d;
+  transition: transform 0.1s;
+}
+
+/* Animation de rotation */
+.dice-3d.rolling {
+  animation: rollDice 1.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+@keyframes rollDice {
+  0% {
+    transform: rotateX(0deg) rotateY(0deg) rotateZ(0deg);
+  }
+  100% {
+    transform: rotateX(720deg) rotateY(1080deg) rotateZ(360deg);
+  }
+}
+
+/* Faces du dé */
+.dice-face {
+  position: absolute;
+  width: 120px;
+  height: 120px;
+  background: linear-gradient(135deg, #22d3ee 0%, #06b6d4 100%);
+  border: 4px solid #0e7490;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 4rem;
+  box-shadow: 
+    inset 0 0 30px rgba(0,0,0,0.3),
+    0 10px 30px rgba(0,0,0,0.5);
+  backface-visibility: visible;
+}
+
+/* Positionnement des 6 faces du cube */
+.dice-face-1 { 
+  transform: rotateY(0deg) translateZ(60px); 
+}
+.dice-face-2 { 
+  transform: rotateY(90deg) translateZ(60px); 
+}
+.dice-face-3 { 
+  transform: rotateX(90deg) translateZ(60px); 
+}
+.dice-face-4 { 
+  transform: rotateX(-90deg) translateZ(60px); 
+}
+.dice-face-5 { 
+  transform: rotateY(-90deg) translateZ(60px); 
+}
+.dice-face-6 { 
+  transform: rotateY(180deg) translateZ(60px); 
+}
+
+/* Animation d'apparition du popover */
+.dice-roller-popover {
+  animation: popIn 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+}
+
+@keyframes popIn {
+  0% {
+    transform: scale(0.8);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
