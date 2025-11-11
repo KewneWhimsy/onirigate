@@ -41,6 +41,7 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
   """
   def start_round(state) do
     dice_pool = Enum.map(1..7, fn _ -> Enum.random(1..6) end)
+
     state
     |> Map.put(:dice_pool, dice_pool)
     |> Map.put(:dice_reserve, [])
@@ -48,12 +49,14 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
   end
 
   defp reset_units_activation(state) do
-    board = state.board
-    |> Enum.map(fn
-      {pos, %Unit{} = unit} -> {pos, %{unit | activated: false, stunned: false}}
-      {pos, other} -> {pos, other}
-    end)
-    |> Enum.into(%{})
+    board =
+      state.board
+      |> Enum.map(fn
+        {pos, %Unit{} = unit} -> {pos, %{unit | activated: false, stunned: false}}
+        {pos, other} -> {pos, other}
+      end)
+      |> Enum.into(%{})
+
     %{state | board: board}
   end
 
@@ -69,10 +72,7 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
       activated_unit = %{new_board[to_pos] | activated: true}
       final_board = Map.put(new_board, to_pos, activated_unit)
       new_pool = List.delete(state.dice_pool, dice_value)
-      new_state = %{state |
-        board: final_board,
-        dice_pool: new_pool
-      }
+      new_state = %{state | board: final_board, dice_pool: new_pool}
       new_state = change_player(new_state)
       {:ok, new_state}
     end
@@ -95,19 +95,17 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
   Déplace une unité de 1 case et pousse une unité adjacente de 1 case dans la même direction.
   """
   def push(state, from_pos, direction, dice_value) do
-    IO.puts("PUSH: Début de l'action avec from_pos=#{inspect(from_pos)}, direction=#{inspect(direction)}")
+    IO.puts(
+      "PUSH: Début de l'action avec from_pos=#{inspect(from_pos)}, direction=#{inspect(direction)}"
+    )
 
     with {:ok, unit} <- Board.get_unit(state.board, from_pos),
          :ok <- validate_push(state, unit, from_pos, direction, dice_value),
          {:ok, new_board} <- Board.push_unit(state.board, from_pos, direction) do
-
       IO.puts("PUSH: Succès, nouveau board=#{inspect(new_board)}")
 
       new_pool = List.delete(state.dice_pool, dice_value)
-      new_state = %{state |
-        board: new_board,
-        dice_pool: new_pool
-      }
+      new_state = %{state | board: new_board, dice_pool: new_pool}
       new_state = change_player(new_state)
       {:ok, new_state}
     end
@@ -116,8 +114,10 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
   defp validate_push(state, unit, from_pos, direction, dice_value) do
     {dr, dc} = direction
     {from_row, from_col} = from_pos
-    push_pos = {from_row + dr, from_col + dc}  # Position de la cible à pousser
-    target_pos = {from_row + 2*dr, from_col + 2*dc}  # Position finale de la cible
+    # Position de la cible à pousser
+    push_pos = {from_row + dr, from_col + dc}
+    # Position finale de la cible
+    target_pos = {from_row + 2 * dr, from_col + 2 * dc}
 
     IO.puts("PUSH: Validation - push_pos=#{inspect(push_pos)}, target_pos=#{inspect(target_pos)}")
 
@@ -142,7 +142,8 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
 
   defp check_unit_at_position(board, position) do
     case board[position] do
-      %Unit{} -> :ok  # Toute unité (allié ou ennemi) est valide pour être poussée
+      # Toute unité (allié ou ennemi) est valide pour être poussée
+      %Unit{} -> :ok
       _ -> {:error, :no_unit_to_push}
     end
   end
@@ -152,6 +153,138 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
       :ok
     else
       {:error, :target_position_occupied}
+    end
+  end
+
+  @doc """
+  Exécute une action ATTACK (dés 4-5)
+  Attaque une unité ennemie adjacente.
+  """
+  def attack(state, from_pos, target_pos, dice_value) do
+    with {:ok, unit} <- Board.get_unit(state.board, from_pos),
+         :ok <- validate_attack(state, unit, from_pos, target_pos, dice_value),
+         {:ok, new_board} <- Board.attack_unit(state.board, target_pos) do
+      # Marquer l'unité attaquante comme activée
+      activated_unit = %{new_board[from_pos] | activated: true}
+      final_board = Map.put(new_board, from_pos, activated_unit)
+
+      # Retirer le dé du pool
+      new_pool = List.delete(state.dice_pool, dice_value)
+
+      new_state = %{state | board: final_board, dice_pool: new_pool}
+
+      # Changer de joueur
+      new_state = change_player(new_state)
+      {:ok, new_state}
+    end
+  end
+
+  defp validate_attack(state, unit, from_pos, target_pos, dice_value) do
+    with :ok <- check_dice_value(dice_value, [4, 5]),
+         :ok <- check_dice_in_pool(state.dice_pool, dice_value),
+         :ok <- check_unit_can_activate(unit),
+         :ok <- check_unit_belongs_to_player(unit, state.current_player),
+         :ok <- check_not_same_position(from_pos, target_pos),
+         :ok <- check_adjacent(from_pos, target_pos, unit.faction),
+         :ok <- check_target_is_enemy(state.board, target_pos, state.current_player) do
+      :ok
+    end
+  end
+
+  # Vérifie que la cible est adjacente (orthogonal + diagonal selon faction)
+  defp check_adjacent(from_pos, target_pos, faction) do
+    {from_row, from_col} = from_pos
+    {to_row, to_col} = target_pos
+
+    row_diff = abs(from_row - to_row)
+    col_diff = abs(from_col - to_col)
+
+    # Adjacence orthogonale (toutes les factions)
+    orthogonal = (row_diff == 1 && col_diff == 0) || (row_diff == 0 && col_diff == 1)
+
+    # Adjacence diagonale (seulement pour Sharks)
+    diagonal = row_diff == 1 && col_diff == 1
+
+    case faction do
+      :sharks ->
+        if orthogonal || diagonal, do: :ok, else: {:error, :target_not_adjacent}
+
+      :dolphins ->
+        if orthogonal, do: :ok, else: {:error, :target_not_adjacent}
+
+      :turtles ->
+        if orthogonal, do: :ok, else: {:error, :target_not_adjacent}
+    end
+  end
+
+  # Vérifie que la cible est bien un ennemi
+  defp check_target_is_enemy(board, target_pos, current_player) do
+    case board[target_pos] do
+      %Unit{player: enemy_player} when enemy_player != current_player ->
+        :ok
+
+      %Unit{} ->
+        {:error, :cannot_attack_ally}
+
+      _ ->
+        {:error, :no_target}
+    end
+  end
+
+  @doc """
+  Exécute une action INTIMIDATE (dés 4-5)
+  Intimide une unité ennemie jusqu'à 3 cases orthogonales.
+  """
+  def intimidate(state, from_pos, target_pos, dice_value) do
+    with {:ok, unit} <- Board.get_unit(state.board, from_pos),
+         :ok <- validate_intimidate(state, unit, from_pos, target_pos, dice_value),
+         {:ok, new_board} <- Board.intimidate_unit(state.board, target_pos) do
+      # Marquer l'unité comme activée
+      activated_unit = %{new_board[from_pos] | activated: true}
+      final_board = Map.put(new_board, from_pos, activated_unit)
+
+      # Retirer le dé du pool
+      new_pool = List.delete(state.dice_pool, dice_value)
+
+      new_state = %{
+        state
+        | board: final_board,
+          dice_pool: new_pool
+      }
+
+      # Changer de joueur
+      new_state = change_player(new_state)
+      {:ok, new_state}
+    end
+  end
+
+  defp validate_intimidate(state, unit, from_pos, target_pos, dice_value) do
+    with :ok <- check_dice_value(dice_value, [4, 5]),
+         :ok <- check_dice_in_pool(state.dice_pool, dice_value),
+         :ok <- check_unit_can_activate(unit),
+         :ok <- check_unit_belongs_to_player(unit, state.current_player),
+         :ok <- check_not_same_position(from_pos, target_pos),
+         :ok <- check_distance(from_pos, target_pos, 3),
+         :ok <- check_orthogonal(from_pos, target_pos),
+         :ok <- check_target_is_enemy(state.board, target_pos, state.current_player) do
+      :ok
+    end
+  end
+
+  # Vérifie que la cible est orthogonale (pas de diagonale)
+  defp check_orthogonal(from_pos, target_pos) do
+    {from_row, from_col} = from_pos
+    {to_row, to_col} = target_pos
+
+    row_diff = abs(from_row - to_row)
+    col_diff = abs(from_col - to_col)
+
+    # Soit même colonne (row_diff > 0, col_diff = 0)
+    # Soit même rangée (row_diff = 0, col_diff > 0)
+    if (row_diff > 0 && col_diff == 0) || (row_diff == 0 && col_diff > 0) do
+      :ok
+    else
+      {:error, :must_be_orthogonal}
     end
   end
 
@@ -199,6 +332,7 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
 
   defp check_distance(from_pos, to_pos, max_distance) do
     distance = calculate_distance(from_pos, to_pos)
+
     if distance <= max_distance do
       :ok
     else
@@ -225,14 +359,6 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
   end
 
   # ========== ACTIONS À IMPLÉMENTER (stubs) ==========
-
-  def attack(_state, _attacker_pos, _target_pos, _dice_value) do
-    {:error, :not_implemented}
-  end
-
-  def intimidate(_state, _from_pos, _target_pos, _dice_value) do
-    {:error, :not_implemented}
-  end
 
   def charge(_state, _from_pos, _direction, _dice_value) do
     {:error, :not_implemented}
@@ -272,12 +398,16 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
 
   def swap_dice(state, pool_dice, reserve_dice) do
     if pool_dice in state.dice_pool and reserve_dice in state.dice_reserve do
-      new_pool = state.dice_pool
-      |> List.delete(pool_dice)
-      |> then(&[reserve_dice | &1])
-      new_reserve = state.dice_reserve
-      |> List.delete(reserve_dice)
-      |> then(&[pool_dice | &1])
+      new_pool =
+        state.dice_pool
+        |> List.delete(pool_dice)
+        |> then(&[reserve_dice | &1])
+
+      new_reserve =
+        state.dice_reserve
+        |> List.delete(reserve_dice)
+        |> then(&[pool_dice | &1])
+
       {:ok, %{state | dice_pool: new_pool, dice_reserve: new_reserve}}
     else
       {:error, :invalid_swap}
@@ -288,8 +418,10 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
     case check_victory(state) do
       {:winner, player} ->
         {:ok, %{state | phase: :finished, winner: player}}
+
       :continue ->
         next_player = if state.current_player == 1, do: 2, else: 1
+
         if state.dice_pool == [] do
           state
           |> Map.put(:current_player, next_player)

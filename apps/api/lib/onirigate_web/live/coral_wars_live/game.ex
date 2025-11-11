@@ -2,10 +2,10 @@
 # 🪸 CoralWars LiveView (Page de jeu)
 # ===========================
 defmodule OnirigateWeb.CoralWarsLive.Game do
-  # LiveView permet d’avoir des pages interactives en temps réel (sans recharger)
+  # LiveView permet d'avoir des pages interactives en temps réel (sans recharger)
   use OnirigateWeb, :live_view
 
-  # On fait des alias pour éviter d’écrire les chemins complets des modules
+  # On fait des alias pour éviter d'écrire les chemins complets des modules
   alias Onirigate.Games.CoralWars.{GameLogic, Board, Unit, GameServer}
 
   # ===========================
@@ -15,7 +15,7 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
   def mount(%{"room_id" => room_id}, session, socket) do
     # Si le socket est connecté, on rejoint la partie via le serveur de jeu
     if connected?(socket) do
-      # On s’abonne au canal PubSub pour recevoir les mises à jour
+      # On s'abonne au canal PubSub pour recevoir les mises à jour
       Phoenix.PubSub.subscribe(Onirigate.PubSub, "game:#{room_id}")
 
       # Génère un identifiant unique pour le joueur
@@ -42,7 +42,7 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
 
           {:ok, socket}
 
-        # 🔴 Si la partie n’existe pas encore → on la crée
+        # 🔴 Si la partie n'existe pas encore → on la crée
         {:error, :room_not_found} ->
           GameServer.start_game(room_id)
           mount(%{"room_id" => room_id}, session, socket)
@@ -85,7 +85,7 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
     {:noreply, assign(socket, state: new_state)}
   end
 
-  # Quand l’autre joueur sélectionne quelque chose (dé, unité, etc.)
+  # Quand l'autre joueur sélectionne quelque chose (dé, unité, etc.)
   @impl true
   def handle_info({:player_selection, player_id, selection_type, value}, socket) do
     if player_id != socket.assigns.player_id do
@@ -108,9 +108,9 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
   def handle_event("select_dice", %{"dice" => dice_str, "index" => index_str}, socket) do
     state = socket.assigns.state
 
-    # Vérifie que c’est bien ton tour
+    # Vérifie que c'est bien ton tour
     if state.current_player != socket.assigns.player_number do
-      {:noreply, put_flash(socket, :error, "Ce n’est pas ton tour !")}
+      {:noreply, put_flash(socket, :error, "Ce n'est pas ton tour !")}
     else
       dice_value = String.to_integer(dice_str)
       dice_index = String.to_integer(index_str)
@@ -121,7 +121,22 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
           do: nil,
           else: {dice_value, dice_index}
 
-      # Notifie l’adversaire
+      # Définir l'action par défaut selon le dé sélectionné
+      new_action_type =
+        if new_selection do
+          {dval, _} = new_selection
+
+          cond do
+            dval in [1, 2, 3] -> :move
+            dval in [4, 5] -> :attack
+            dval == 6 -> :charge
+            true -> :move
+          end
+        else
+          socket.assigns.action_type
+        end
+
+      # Notifie l'adversaire
       GameServer.notify_selection(
         socket.assigns.room_id,
         socket.assigns.player_id,
@@ -137,7 +152,7 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
           compute_reachable_positions(
             socket.assigns.selected_unit,
             dval,
-            socket.assigns.action_type,
+            new_action_type,
             socket.assigns.state.board,
             socket.assigns.player_number
           )
@@ -148,6 +163,7 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
       {:noreply,
        assign(socket,
          selected_dice: new_selection,
+         action_type: new_action_type,
          reachable_positions: reachable_positions,
          selected_destination:
            if(new_selection == nil, do: nil, else: socket.assigns.selected_destination)
@@ -155,11 +171,26 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
     end
   end
 
-  # 2️⃣ Toggle entre Move et Push
+  # 2️⃣ Toggle entre les actions (contextuel selon le dé)
   @impl true
   def handle_event("toggle_action", _, socket) do
-    new_action_type = if socket.assigns.action_type == :move, do: :push, else: :move
+    # Détermine la nouvelle action selon le contexte
+    new_action_type =
+      case socket.assigns.selected_dice do
+        {dice_value, _} when dice_value in [1, 2, 3] ->
+          # Dés 1-3 : toggle Move ↔️ Push
+          if socket.assigns.action_type == :move, do: :push, else: :move
 
+        {dice_value, _} when dice_value in [4, 5] ->
+          # Dés 4-5 : toggle Attack ↔️ Intimidate
+          if socket.assigns.action_type == :attack, do: :intimidate, else: :attack
+
+        _ ->
+          # Par défaut, on alterne Move/Push
+          if socket.assigns.action_type == :move, do: :push, else: :move
+      end
+
+    # Recalcule les positions accessibles si nécessaire
     reachable_positions =
       if socket.assigns.selected_unit && socket.assigns.selected_dice do
         {dice_value, _} = socket.assigns.selected_dice
@@ -182,38 +213,37 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
   # 3️⃣ Quand on clique sur une case du plateau
   @impl true
   def handle_event("select_cell", %{"row" => row_str, "col" => col_str}, socket) do
-    position = {String.to_integer(row_str), String.to_integer(col_str)}
     state = socket.assigns.state
 
-    if is_nil(state) || is_nil(state.board) do
-      {:noreply, socket}
-    else
-      case Board.get_unit(state.board, position) do
-        # Si c’est une unité
-        {:ok, unit} ->
-          # Mode PUSH → cible possible
-          if socket.assigns.selected_unit && socket.assigns.action_type == :push &&
-               position in socket.assigns.reachable_positions do
-            {:noreply, assign(socket, selected_destination: position)}
-          else
-            # Si c’est une unité du joueur
-            if unit.player == state.current_player do
-              # Si on reclique sur la même → désélection
-              if socket.assigns.selected_unit == position do
-                GameServer.notify_selection(
-                  socket.assigns.room_id,
-                  socket.assigns.player_id,
-                  :unit,
-                  nil
-                )
+    # Vérifie que c'est bien ton tour
+    if state.current_player == socket.assigns.player_number do
+      row = String.to_integer(row_str)
+      col = String.to_integer(col_str)
+      position = {row, col}
 
-                {:noreply,
-                 assign(socket,
-                   selected_unit: nil,
-                   selected_destination: nil,
-                   reachable_positions: []
-                 )}
-              else
+      case Board.get_unit(state.board, position) do
+        # Si la case contient une unité
+        {:ok, unit} ->
+          cond do
+            # 1️⃣ Si c'est dans les positions accessibles → DESTINATION
+            position in socket.assigns.reachable_positions ->
+              {:noreply, assign(socket, selected_destination: position)}
+
+            # 2️⃣ Si c'est notre unité → SÉLECTION
+            unit.player == socket.assigns.player_number ->
+              # Si un dé est sélectionné, calcule les cases accessibles
+              if socket.assigns.selected_dice do
+                {dice_value, _} = socket.assigns.selected_dice
+
+                reachable_positions =
+                  compute_reachable_positions(
+                    position,
+                    dice_value,
+                    socket.assigns.action_type,
+                    state.board,
+                    socket.assigns.player_number
+                  )
+
                 GameServer.notify_selection(
                   socket.assigns.room_id,
                   socket.assigns.player_id,
@@ -221,31 +251,25 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
                   position
                 )
 
-                reachable_positions =
-                  if socket.assigns.selected_dice do
-                    {dice_value, _} = socket.assigns.selected_dice
-
-                    compute_reachable_positions(
-                      position,
-                      dice_value,
-                      socket.assigns.action_type,
-                      state.board,
-                      socket.assigns.player_number
-                    )
-                  else
-                    []
-                  end
-
                 {:noreply,
                  assign(socket,
                    selected_unit: position,
                    selected_destination: nil,
                    reachable_positions: reachable_positions
                  )}
+              else
+                # Pas de dé sélectionné : on sélectionne quand même l'unité
+                {:noreply,
+                 assign(socket,
+                   selected_unit: position,
+                   selected_destination: nil,
+                   reachable_positions: []
+                 )}
               end
-            else
+
+            # 3️⃣ Unité ennemie hors reachable → RIEN
+            true ->
               {:noreply, socket}
-            end
           end
 
         # Si la case est vide
@@ -265,7 +289,7 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
     end
   end
 
-  # 4️⃣ Exécuter l’action (move/push)
+  # 4️⃣ Exécuter l'action (move/push/attack)
   @impl true
   def handle_event("execute_action", _params, socket) do
     selected_dice = socket.assigns.selected_dice
@@ -339,6 +363,65 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
             {:error, reason} ->
               {:noreply, put_flash(socket, :error, "Action impossible : #{inspect(reason)}")}
           end
+
+        :attack ->
+          case GameServer.execute_attack(
+                 socket.assigns.room_id,
+                 socket.assigns.player_id,
+                 dice_value,
+                 from_pos,
+                 to_pos
+               ) do
+            {:ok, _} ->
+              GameServer.notify_selection(
+                socket.assigns.room_id,
+                socket.assigns.player_id,
+                :clear,
+                nil
+              )
+
+              {:noreply,
+               assign(socket,
+                 selected_dice: nil,
+                 selected_unit: nil,
+                 selected_destination: nil,
+                 reachable_positions: [],
+                 action_type: :move
+               )}
+
+            {:error, reason} ->
+              {:noreply, put_flash(socket, :error, "Attaque impossible : #{inspect(reason)}")}
+          end
+
+        :intimidate ->
+          case GameServer.execute_intimidate(
+                 socket.assigns.room_id,
+                 socket.assigns.player_id,
+                 dice_value,
+                 from_pos,
+                 to_pos
+               ) do
+            {:ok, _} ->
+              GameServer.notify_selection(
+                socket.assigns.room_id,
+                socket.assigns.player_id,
+                :clear,
+                nil
+              )
+
+              {:noreply,
+               assign(socket,
+                 selected_dice: nil,
+                 selected_unit: nil,
+                 selected_destination: nil,
+                 reachable_positions: [],
+                 action_type: :move
+               )}
+
+            {:error, reason} ->
+              {:noreply,
+               put_flash(socket, :error, "Intimidation impossible : #{inspect(reason)}")}
+          end
       end
     else
       {:noreply, put_flash(socket, :error, "Sélectionne : dé → unité → destination")}
@@ -373,10 +456,10 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
   Calcule les positions atteignables pour un déplacement (:move).
 
   Règles :
-  - On peut se déplacer d’un nombre de cases égal à la valeur du dé.
+  - On peut se déplacer d'un nombre de cases égal à la valeur du dé.
   - On peut traverser les unités alliées.
   - On ne peut PAS traverser les ennemis ni les récifs.
-  - Le mouvement s’arrête si on sort du plateau ou si un ennemi/récif bloque le passage.
+  - Le mouvement s'arrête si on sort du plateau ou si un ennemi/récif bloque le passage.
   """
   defp compute_reachable_positions({row, col}, dice_value, :move, board, player_number)
        when is_integer(dice_value) and dice_value > 0 do
@@ -394,18 +477,8 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
 
     max_steps = if dice_value in [1, 2, 3], do: 3, else: dice_value
 
-    for {dr, dc} <- directions,
-        step <- 1..max_steps,
-        new_row = row + dr * step,
-        new_col = col + dc * step,
-        new_row in 1..8,
-        new_col in 1..8,
-        is_nil(board[{new_row, new_col}]) || board[{new_row, new_col}] == :reef do
-      {new_row, new_col}
-    end
-
     Enum.flat_map(directions, fn {dr, dc} ->
-      # On parcourt les cases dans chaque direction, jusqu’à la limite du dé
+      # On parcourt les cases dans chaque direction, jusqu'à la limite du dé
       Enum.reduce_while(1..max_steps, [], fn step, acc ->
         new_pos = {row + dr * step, col + dc * step}
         {new_row, new_col} = new_pos
@@ -418,15 +491,15 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
               {:cont, [new_pos | acc]}
 
             :reef ->
-              # Récif → bloque le chemin, on s’arrête ici
+              # Récif → bloque le chemin, on s'arrête ici
               {:halt, acc}
 
             %Unit{player: ^player_number} ->
-              # Unité alliée → on peut traverser, mais pas s’arrêter dessus
+              # Unité alliée → on peut traverser, mais pas s'arrêter dessus
               {:cont, acc}
 
             %Unit{} ->
-              # Unité ennemie → on ne peut ni s’arrêter ni passer à travers
+              # Unité ennemie → on ne peut ni s'arrêter ni passer à travers
               {:halt, acc}
           end
         else
@@ -434,7 +507,7 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
           {:halt, acc}
         end
       end)
-      # pour garder l’ordre logique (proche → loin)
+      # pour garder l'ordre logique (proche → loin)
       |> Enum.reverse()
     end)
   end
@@ -450,6 +523,80 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
     end)
   end
 
+  # Pour ATTACK → ennemis adjacents (orthogonal + diagonal pour Sharks)
+  defp compute_reachable_positions({row, col}, dice_value, :attack, board, player_number)
+       when dice_value in [4, 5] do
+    case Board.get_unit(board, {row, col}) do
+      {:ok, %Unit{faction: faction}} ->
+        # Directions orthogonales (toutes les factions)
+        orthogonal = [{-1, 0}, {1, 0}, {0, -1}, {0, 1}]
+
+        # Directions diagonales (seulement pour Sharks)
+        diagonal = [{-1, -1}, {-1, 1}, {1, -1}, {1, 1}]
+
+        directions =
+          case faction do
+            :sharks -> orthogonal ++ diagonal
+            _ -> orthogonal
+          end
+
+        # Ne garder que les positions avec des ennemis
+        Enum.flat_map(directions, fn {dr, dc} ->
+          target_pos = {row + dr, col + dc}
+          {target_row, target_col} = target_pos
+
+          if target_row in 1..8 and target_col in 1..8 do
+            case board[target_pos] do
+              %Unit{player: enemy_player} when enemy_player != player_number ->
+                [target_pos]
+
+              _ ->
+                []
+            end
+          else
+            []
+          end
+        end)
+
+      _ ->
+        []
+    end
+  end
+
+  # Pour INTIMIDATE → ennemis jusqu'à 3 cases orthogonales
+  defp compute_reachable_positions({row, col}, dice_value, :intimidate, board, player_number)
+       when dice_value in [4, 5] do
+    # Directions orthogonales uniquement
+    directions = [{-1, 0}, {1, 0}, {0, -1}, {0, 1}]
+
+    Enum.flat_map(directions, fn {dr, dc} ->
+      # Parcourir jusqu'à 3 cases dans chaque direction
+      Enum.reduce_while(1..3, [], fn step, acc ->
+        target_pos = {row + dr * step, col + dc * step}
+        {target_row, target_col} = target_pos
+
+        if target_row in 1..8 and target_col in 1..8 do
+          case board[target_pos] do
+            # Ennemi trouvé → on l'ajoute et on continue
+            %Unit{player: enemy_player} when enemy_player != player_number ->
+              {:cont, [target_pos | acc]}
+
+            # Case vide → on continue plus loin
+            nil ->
+              {:cont, acc}
+
+            # Allié ou récif → bloque la ligne de vue
+            _ ->
+              {:halt, acc}
+          end
+        else
+          {:halt, acc}
+        end
+      end)
+      |> Enum.reverse()
+    end)
+  end
+
   defp compute_reachable_positions(_, _, _, _, _), do: []
 
   # ===========================
@@ -457,7 +604,7 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
   # ===========================
   @impl true
   def render(assigns) do
-    # Affichage d’attente pendant la connexion
+    # Affichage d'attente pendant la connexion
     if is_nil(assigns[:state]) do
       ~H"""
       <div class="min-h-screen bg-slate-900 flex items-center justify-center text-white">
@@ -500,7 +647,7 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
               <p class="text-slate-400 text-sm">Phase : {@state.phase}</p>
             </div>
             <div class="bg-slate-800/50 rounded-xl p-4 border border-slate-700">
-              <h3 class="text-lg font-bold text-white mb-3">Instructions</h3>
+              <h3 class="text-lg font-bold text-white mb-3">📋 Instructions</h3>
               <div class="text-slate-300 text-sm space-y-2">
                 <%= if @state.current_player == @player_number do %>
                   <p class="text-cyan-400 font-bold">C'est ton tour !</p>
@@ -519,8 +666,28 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
               <div class="text-slate-300 text-sm space-y-1">
                 <p>Dé : {if @selected_dice, do: elem(@selected_dice, 0), else: "—"}</p>
                 <p>Unité : {if @selected_unit, do: inspect(@selected_unit), else: "—"}</p>
-                <p>Destination : {if @selected_destination, do: inspect(@selected_destination), else: "—"}</p>
-                <p>Action : <%= if @action_type == :move, do: "Move 🔄", else: "Push 👊" %></p>
+                <p>
+                  Destination : {if @selected_destination, do: inspect(@selected_destination), else: "—"}
+                </p>
+                <p>
+                  Action :
+                  <span class={[
+                    "font-bold px-2 py-1 rounded",
+                    @action_type == :move && "bg-purple-500/30 text-purple-300",
+                    @action_type == :push && "bg-purple-500/30 text-purple-300",
+                    @action_type == :attack && "bg-orange-500/30 text-orange-300",
+                    @action_type == :intimidate && "bg-orange-500/30 text-orange-300",
+                    @action_type == :charge && "bg-red-500/30 text-red-300"
+                  ]}>
+                    <%= case @action_type do %>
+                      <% :move -> %>Move 🔄
+                      <% :push -> %>Push 👊
+                      <% :attack -> %>Attack ⚔️
+                      <% :intimidate -> %>Intimidate 😱
+                      <% :charge -> %>Charge ⚡
+                    <% end %>
+                  </span>
+                </p>
               </div>
             </div>
             <div class="space-y-2">
@@ -530,7 +697,13 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
                   phx-click="execute_action"
                   class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-4 rounded-lg transition-all hover:scale-105 shadow-lg hover:shadow-green-500/50"
                 >
-                  ✅ Exécuter <%= if @action_type == :move, do: "Move", else: "Push" %> (Dé {dice_value})
+                  ✅ Exécuter <%= case @action_type do %>
+                    <% :move -> %>Move
+                    <% :push -> %>Push
+                    <% :attack -> %>Attack
+                    <% :intimidate -> %>Intimidate
+                    <% :charge -> %>Charge
+                  <% end %> (Dé {dice_value})
                 </button>
               <% else %>
                 <button
@@ -570,26 +743,26 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
                     <% is_destination = @selected_destination == position %>
                     <% is_reachable = position in @reachable_positions %>
                     <% is_opponent_selected = @opponent_unit == position %>
-                    <% is_enemy_unit = case unit do
-                         %Unit{player: enemy_player} when enemy_player != @player_number -> true
-                         _ -> false
-                       end %>
+                    <% is_enemy_unit =
+                      case unit do
+                        %Unit{player: enemy_player} when enemy_player != @player_number -> true
+                        _ -> false
+                      end %>
                     <button
                       phx-click="select_cell"
                       phx-value-row={row}
                       phx-value-col={col}
                       disabled={@state.current_player != @player_number}
                       class={[
-                        "aspect-square flex items-center justify-center text-2xl font-bold rounded transition-all",
+                        "aspect-square flex items-center justify-center text-2xl rounded transition-all",
                         is_selected && "ring-4 ring-yellow-400 scale-110 bg-yellow-500/20",
                         is_destination && "ring-4 ring-green-400 scale-110 bg-green-500/20",
-                        is_reachable && @action_type == :move && "ring-2 ring-green-300 bg-green-500/10 hover:bg-green-400/20",
-                        is_reachable && @action_type == :push && "ring-2 ring-red-500 bg-red-500/20 hover:bg-red-400/20",
+                        is_reachable && not is_selected && not is_destination &&
+                          "bg-cyan-500/30 hover:bg-cyan-500/50 ring-2 ring-cyan-400",
                         is_opponent_selected && "ring-2 ring-orange-400",
-                        is_enemy_unit && @action_type == :push && @selected_unit && "cursor-pointer hover:bg-red-500/30",
-                        unit && "bg-slate-600 hover:bg-slate-500",
-                        !unit && "bg-slate-700 hover:bg-slate-600",
-                        @state.current_player != @player_number && "opacity-75 cursor-not-allowed"
+                        not is_selected && not is_destination && not is_reachable && not is_opponent_selected &&
+                          "bg-slate-800 hover:bg-slate-700",
+                        @state.current_player != @player_number && "cursor-not-allowed opacity-75"
                       ]}
                     >
                       <%= render_unit(unit) %>
@@ -597,32 +770,39 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
                   <% end %>
                 <% end %>
               </div>
-            </div>
-            <div class="mt-6 bg-slate-800/50 rounded-xl p-6 border border-slate-700">
-              <h3 class="text-xl font-bold text-white mb-4">Pool de dés</h3>
-              <%= if @state.dice_pool == [] do %>
-                <p class="text-center text-slate-400">Aucun dé disponible</p>
-              <% else %>
-                <%# Toggle Move/Push au-dessus des dés 1-3 %>
-                <%= if @selected_dice && elem(@selected_dice, 0) in [1, 2, 3] do %>
-                  <div class="mb-4 flex justify-center">
-                    <button
-                      phx-click="toggle_action"
-                      class={[
-                        "px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2",
-                        @action_type == :move && "bg-blue-500 text-white",
-                        @action_type == :push && "bg-amber-500 text-white"
-                      ]}
-                    >
-                      <%= if @action_type == :move do %>
-                        🔄 Move
-                      <% else %>
-                        👊 Push
-                      <% end %>
-                    </button>
-                  </div>
+              <%= if @state.dice_pool != [] do %>
+                <%= if @selected_dice do %>
+                  <% {dice_value, _} = @selected_dice %>
+                  <%= if dice_value in [1, 2, 3] do %>
+                    <div class="mt-4 flex justify-center">
+                      <button
+                        phx-click="toggle_action"
+                        class="bg-purple-500 hover:bg-purple-600 text-white font-bold py-2 px-4 rounded-lg transition"
+                      >
+                        <%= if @action_type == :move do %>
+                          🔄 Move
+                        <% else %>
+                          👊 Push
+                        <% end %>
+                      </button>
+                    </div>
+                  <% end %>
+                  <%= if dice_value in [4, 5] do %>
+                    <div class="mt-4 flex justify-center">
+                      <button
+                        phx-click="toggle_action"
+                        class="bg-orange-500 hover:bg-orange-600 text-white font-bold py-2 px-4 rounded-lg transition"
+                      >
+                        <%= if @action_type == :attack do %>
+                          ⚔️ Attack
+                        <% else %>
+                          😱 Intimidate
+                        <% end %>
+                      </button>
+                    </div>
+                  <% end %>
                 <% end %>
-                <div class="flex gap-3 justify-center flex-wrap">
+                <div class="flex gap-3 justify-center flex-wrap mt-4">
                   <%= for {dice, index} <- Enum.with_index(@state.dice_pool) do %>
                     <button
                       phx-click="select_dice"
@@ -631,9 +811,11 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
                       disabled={@state.current_player != @player_number}
                       class={[
                         "w-16 h-16 rounded-lg flex items-center justify-center text-2xl font-bold transition-all",
-                        @selected_dice == {dice, index} && "ring-4 ring-yellow-400 scale-110 bg-yellow-500",
+                        @selected_dice == {dice, index} &&
+                          "ring-4 ring-yellow-400 scale-110 bg-yellow-500",
                         @opponent_dice == {dice, index} && "ring-2 ring-orange-400",
-                        @selected_dice != {dice, index} && @opponent_dice != {dice, index} && "bg-cyan-500 hover:bg-cyan-600 text-white hover:scale-105",
+                        @selected_dice != {dice, index} && @opponent_dice != {dice, index} &&
+                          "bg-cyan-500 hover:bg-cyan-600 text-white hover:scale-105",
                         @state.current_player != @player_number && "opacity-75 cursor-not-allowed"
                       ]}
                     >

@@ -24,11 +24,14 @@ defmodule Onirigate.Games.CoralWars.GameServer do
     |> Enum.map(fn {game_id, pid} ->
       # Pour chaque jeu, demande son état via GenServer.call
       case GenServer.call(pid, :get_info, 5000) do
-        {:ok, info} -> Map.put(info, :game_id, game_id) # Ajoute l'ID du jeu à l'info
-        _ -> nil # Ignore si erreur
+        # Ajoute l'ID du jeu à l'info
+        {:ok, info} -> Map.put(info, :game_id, game_id)
+        # Ignore si erreur
+        _ -> nil
       end
     end)
-    |> Enum.reject(&is_nil/1) # Enlève les entrées nil
+    # Enlève les entrées nil
+    |> Enum.reject(&is_nil/1)
   end
 
   # Permet à un joueur de rejoindre une partie
@@ -36,7 +39,8 @@ defmodule Onirigate.Games.CoralWars.GameServer do
     # Appelle le serveur de jeu pour ajouter le joueur
     GenServer.call(via(game_id), {:join, player_id}, 5000)
   catch
-    :exit, {:noproc, _} -> {:error, :room_not_found} # Si le serveur n'existe pas
+    # Si le serveur n'existe pas
+    :exit, {:noproc, _} -> {:error, :room_not_found}
   end
 
   @doc """
@@ -49,7 +53,30 @@ defmodule Onirigate.Games.CoralWars.GameServer do
 
   # Permet à un joueur de pousser une autre unité
   def execute_push(game_id, player_id, dice_value, from_pos, direction) do
-    GenServer.call(via(game_id), {:execute_push, player_id, dice_value, from_pos, direction}, 5000)
+    GenServer.call(
+      via(game_id),
+      {:execute_push, player_id, dice_value, from_pos, direction},
+      5000
+    )
+  end
+
+  def execute_attack(game_id, player_id, dice_value, from_pos, target_pos) do
+    GenServer.call(
+      via(game_id),
+      {:execute_attack, player_id, dice_value, from_pos, target_pos},
+      5000
+    )
+  end
+
+  @doc """
+  Exécute une action INTIMIDATE
+  """
+  def execute_intimidate(game_id, player_id, dice_value, from_pos, target_pos) do
+    GenServer.call(
+      via(game_id),
+      {:execute_intimidate, player_id, dice_value, from_pos, target_pos},
+      5000
+    )
   end
 
   # Permet à un joueur de passer son tour
@@ -68,49 +95,70 @@ defmodule Onirigate.Games.CoralWars.GameServer do
   # Initialise l'état du serveur quand le processus démarre
   def init(game_id) do
     # Crée un état initial de jeu, ajoute des unités de test, et démarre le premier tour
-    game_state = GameLogic.initial_state()
-    |> add_test_units()  # Ajoute les unités de test
-    |> GameLogic.start_round()
+    game_state =
+      GameLogic.initial_state()
+      # Ajoute les unités de test
+      |> add_test_units()
+      |> GameLogic.start_round()
 
     # Crée la structure d'état du serveur
     state = %__MODULE__{
       game_id: game_id,
       state: game_state,
-      players: %{} # Map vide pour les joueurs
+      # Map vide pour les joueurs
+      players: %{}
     }
-    {:ok, state} # Retourne un tuple {:ok, state} pour indiquer le succès
+
+    # Retourne un tuple {:ok, state} pour indiquer le succès
+    {:ok, state}
   end
 
   @impl true
   # Gère l'appel pour obtenir des infos sur la partie
   def handle_call(:get_info, _from, state) do
     info = %{
-      player_count: map_size(state.players), # Nombre de joueurs connectés
-      max_players: 2, # Nombre max de joueurs
-      round: state.state.round, # Tour actuel
-      phase: state.state.phase # Phase actuelle
+      # Nombre de joueurs connectés
+      player_count: map_size(state.players),
+      # Nombre max de joueurs
+      max_players: 2,
+      # Tour actuel
+      round: state.state.round,
+      # Phase actuelle
+      phase: state.state.phase
     }
-    {:reply, {:ok, info}, state} # Répond avec les infos et garde l'état inchangé
+
+    # Répond avec les infos et garde l'état inchangé
+    {:reply, {:ok, info}, state}
   end
 
   @impl true
   # Gère l'appel pour rejoindre une partie
   def handle_call({:join, player_id}, _from, state) do
     case Map.get(state.players, player_id) do
-      nil -> # Nouveau joueur
+      # Nouveau joueur
+      nil ->
         case map_size(state.players) do
-          0 -> # Premier joueur
-            new_players = Map.put(state.players, player_id, 1) # Ajoute le joueur 1
+          # Premier joueur
+          0 ->
+            # Ajoute le joueur 1
+            new_players = Map.put(state.players, player_id, 1)
             new_state = %{state | players: new_players}
             {:reply, {:ok, {state.state, 1}}, new_state}
-          1 -> # Deuxième joueur
-            new_players = Map.put(state.players, player_id, 2) # Ajoute le joueur 2
+
+          # Deuxième joueur
+          1 ->
+            # Ajoute le joueur 2
+            new_players = Map.put(state.players, player_id, 2)
             new_state = %{state | players: new_players}
             {:reply, {:ok, {state.state, 2}}, new_state}
-          _ -> # Trop de joueurs
+
+          # Trop de joueurs
+          _ ->
             {:reply, {:error, :room_full}, state}
         end
-      player_number -> # Joueur déjà présent (reconnexion)
+
+      # Joueur déjà présent (reconnexion)
+      player_number ->
         {:reply, {:ok, {state.state, player_number}}, state}
     end
   end
@@ -118,52 +166,134 @@ defmodule Onirigate.Games.CoralWars.GameServer do
   @impl true
   # Gère l'appel pour exécuter un mouvement
   def handle_call({:execute_move, player_id, dice_value, from_pos, to_pos}, _from, state) do
-    player_number = state.players[player_id] # Récupère le numéro du joueur
+    # Récupère le numéro du joueur
+    player_number = state.players[player_id]
     # Vérifie que c'est bien son tour
     if player_number == state.state.current_player do
       case GameLogic.move(state.state, from_pos, to_pos, dice_value) do
-        {:ok, new_game_state} -> # Mouvement réussi
+        # Mouvement réussi
+        {:ok, new_game_state} ->
           # Vérifie si la partie est gagnée
           case GameLogic.check_victory(new_game_state) do
-            {:winner, winner} -> # Partie terminée
+            # Partie terminée
+            {:winner, winner} ->
               final_state = %{new_game_state | phase: :finished, winner: winner}
-              broadcast_game_update(state.game_id, final_state) # Notifie tous les joueurs
+              # Notifie tous les joueurs
+              broadcast_game_update(state.game_id, final_state)
               {:reply, {:ok, final_state}, %{state | state: final_state}}
-            :continue -> # Partie continue
+
+            # Partie continue
+            :continue ->
               broadcast_game_update(state.game_id, new_game_state)
               {:reply, {:ok, new_game_state}, %{state | state: new_game_state}}
           end
-        {:error, reason} -> # Mouvement impossible
+
+        # Mouvement impossible
+        {:error, reason} ->
           {:reply, {:error, reason}, state}
       end
     else
-      {:reply, {:error, :not_your_turn}, state} # Pas le tour du joueur
+      # Pas le tour du joueur
+      {:reply, {:error, :not_your_turn}, state}
     end
   end
 
   @impl true
   # Gère l'appel pour pousser une unité
   def handle_call({:execute_push, player_id, dice_value, from_pos, direction}, _from, state) do
-    player_number = state.players[player_id] # Récupère le numéro du joueur
+    # Récupère le numéro du joueur
+    player_number = state.players[player_id]
     # Vérifie que c'est bien son tour
     if player_number == state.state.current_player do
       case GameLogic.push(state.state, from_pos, direction, dice_value) do
-        {:ok, new_game_state} -> # Push réussi
+        # Push réussi
+        {:ok, new_game_state} ->
           # Vérifie si la partie est gagnée
           case GameLogic.check_victory(new_game_state) do
-            {:winner, winner} -> # Partie terminée
+            # Partie terminée
+            {:winner, winner} ->
               final_state = %{new_game_state | phase: :finished, winner: winner}
               broadcast_game_update(state.game_id, final_state)
               {:reply, {:ok, final_state}, %{state | state: final_state}}
-            :continue -> # Partie continue
+
+            # Partie continue
+            :continue ->
               broadcast_game_update(state.game_id, new_game_state)
               {:reply, {:ok, new_game_state}, %{state | state: new_game_state}}
           end
-        {:error, reason} -> # Push impossible
+
+        # Push impossible
+        {:error, reason} ->
           {:reply, {:error, reason}, state}
       end
     else
-      {:reply, {:error, :not_your_turn}, state} # Pas le tour du joueur
+      # Pas le tour du joueur
+      {:reply, {:error, :not_your_turn}, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:execute_attack, player_id, dice_value, from_pos, target_pos}, _from, state) do
+    player_number = state.players[player_id]
+
+    if player_number == state.state.current_player do
+      case GameLogic.attack(state.state, from_pos, target_pos, dice_value) do
+        {:ok, new_game_state} ->
+          case GameLogic.check_victory(new_game_state) do
+            {:winner, winner} ->
+              final_state = %{new_game_state | phase: :finished, winner: winner}
+              broadcast_game_update(state.game_id, final_state)
+              {:reply, {:ok, final_state}, %{state | state: final_state}}
+
+            :continue ->
+              broadcast_game_update(state.game_id, new_game_state)
+              {:reply, {:ok, new_game_state}, %{state | state: new_game_state}}
+          end
+
+        {:error, reason} ->
+          {:reply, {:error, reason}, state}
+      end
+    else
+      {:reply, {:error, :not_your_turn}, state}
+    end
+  end
+
+  @impl true
+  # Gère l'appel pour intimider une unité
+  def handle_call(
+        {:execute_intimidate, player_id, dice_value, from_pos, target_pos},
+        _from,
+        state
+      ) do
+    # Récupère le numéro du joueur
+    player_number = state.players[player_id]
+
+    # Vérifie que c'est bien son tour
+    if player_number == state.state.current_player do
+      case GameLogic.intimidate(state.state, from_pos, target_pos, dice_value) do
+        # Intimidation réussie
+        {:ok, new_game_state} ->
+          # Vérifie si la partie est gagnée
+          case GameLogic.check_victory(new_game_state) do
+            # Partie terminée
+            {:winner, winner} ->
+              final_state = %{new_game_state | phase: :finished, winner: winner}
+              broadcast_game_update(state.game_id, final_state)
+              {:reply, {:ok, final_state}, %{state | state: final_state}}
+
+            # Partie continue
+            :continue ->
+              broadcast_game_update(state.game_id, new_game_state)
+              {:reply, {:ok, new_game_state}, %{state | state: new_game_state}}
+          end
+
+        # Intimidation impossible
+        {:error, reason} ->
+          {:reply, {:error, reason}, state}
+      end
+    else
+      # Pas le tour du joueur
+      {:reply, {:error, :not_your_turn}, state}
     end
   end
 
@@ -171,12 +301,16 @@ defmodule Onirigate.Games.CoralWars.GameServer do
   # Gère l'appel pour passer son tour
   def handle_call({:pass_turn, player_id}, _from, state) do
     player_number = state.players[player_id]
+
     if player_number == state.state.current_player do
       case GameLogic.pass_turn(state.state) do
-        {:ok, new_game_state} -> # Tour passé avec succès
+        # Tour passé avec succès
+        {:ok, new_game_state} ->
           broadcast_game_update(state.game_id, new_game_state)
           {:reply, {:ok, new_game_state}, %{state | state: new_game_state}}
-        {:error, reason} -> # Erreur
+
+        # Erreur
+        {:error, reason} ->
           {:reply, {:error, reason}, state}
       end
     else
@@ -193,7 +327,9 @@ defmodule Onirigate.Games.CoralWars.GameServer do
       "game:#{state.game_id}",
       {:player_selection, player_id, selection_type, value}
     )
-    {:noreply, state} # Pas de réponse, état inchangé
+
+    # Pas de réponse, état inchangé
+    {:noreply, state}
   end
 
   # ========== HELPERS ==========
@@ -223,19 +359,24 @@ defmodule Onirigate.Games.CoralWars.GameServer do
     baby2 = Unit.new("p2_baby", :baby, :sharks, 2)
 
     # Crée les unités pour tester le push (face à face)
-    push_blue = Unit.new("push_blue", :basic, :dolphins, 1)  # Unité bleue
-    push_red = Unit.new("push_red", :basic, :sharks, 2)     # Unité rouge
+    # Unité bleue
+    push_blue = Unit.new("push_blue", :basic, :dolphins, 1)
+    # Unité rouge
+    push_red = Unit.new("push_red", :basic, :sharks, 2)
 
     # Initialise le board avec toutes les unités
-    board = state.board
-    |> Map.put({2, 3}, unit1)
-    |> Map.put({1, 5}, unit2)
-    |> Map.put({1, 4}, baby1)
-    |> Map.put({8, 3}, unit3)
-    |> Map.put({7, 5}, unit4)
-    |> Map.put({8, 4}, baby2)
-    |> Map.put({4, 3}, push_blue)  # Unité bleue à (4,3)
-    |> Map.put({4, 4}, push_red)   # Unité rouge à (4,4) - adjacente à la bleue
+    board =
+      state.board
+      |> Map.put({2, 3}, unit1)
+      |> Map.put({1, 5}, unit2)
+      |> Map.put({1, 4}, baby1)
+      |> Map.put({8, 3}, unit3)
+      |> Map.put({7, 5}, unit4)
+      |> Map.put({8, 4}, baby2)
+      # Unité bleue à (4,3)
+      |> Map.put({4, 3}, push_blue)
+      # Unité rouge à (4,4) - adjacente à la bleue
+      |> Map.put({4, 4}, push_red)
 
     %{state | board: board}
   end

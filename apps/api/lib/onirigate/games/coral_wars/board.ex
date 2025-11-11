@@ -1,4 +1,6 @@
 defmodule Onirigate.Games.CoralWars.Board do
+  alias Onirigate.Games.CoralWars.Unit
+
   @moduledoc """
   Gère le plateau 8x8 et les positions
   """
@@ -65,6 +67,45 @@ defmodule Onirigate.Games.CoralWars.Board do
       {:ok, new_board}
     else
       _ -> {:error, :push_failed}
+    end
+  end
+
+  @doc """
+  Attaque une unité à une position donnée.
+  Si l'unité n'est pas Stunt, elle le devient.
+  Si elle est déjà Stunt, elle est retirée du jeu.
+  Retourne {:ok, new_board} ou {:error, reason}.
+  """
+  def attack_unit(board, target_pos) do
+    case board[target_pos] do
+      %Unit{stunned: false} = unit ->
+        # Première attaque : l'unité devient Stunt
+        stunned_unit = %{unit | stunned: true}
+        {:ok, Map.put(board, target_pos, stunned_unit)}
+
+      %Unit{stunned: true} ->
+        # Déjà Stunt : retirée du jeu
+        {:ok, Map.put(board, target_pos, nil)}
+
+      _ ->
+        {:error, :no_target}
+    end
+  end
+
+  @doc """
+  Intimide une unité à une position donnée.
+  L'unité reçoit le flag intimidated: true.
+  Retourne {:ok, new_board} ou {:error, reason}.
+  """
+  def intimidate_unit(board, target_pos) do
+    case board[target_pos] do
+      %Unit{} = unit ->
+        # Ajoute le flag intimidated
+        intimidated_unit = %{unit | intimidated: true}
+        {:ok, Map.put(board, target_pos, intimidated_unit)}
+
+      _ ->
+        {:error, :no_target}
     end
   end
 
