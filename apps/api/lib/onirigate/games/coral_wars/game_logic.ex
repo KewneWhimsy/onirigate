@@ -356,9 +356,9 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
   end
 end
 
-  # Résolution du jet d'intimidation
+# Résolution du jet d'intimidation
 defp resolve_intimidation_roll(state, roll_result, pending_roll) do
-  # Récupérer l'unité
+  # Récupérer l'unité (avant modification)
   {:ok, unit} = Board.get_unit(state.board, pending_roll.from_pos)
 
   # ✅ Retirer le flag intimidated (dans TOUS les cas)
@@ -371,7 +371,6 @@ defp resolve_intimidation_roll(state, roll_result, pending_roll) do
 
   if roll_result >= 4 do
     # ✅ Jet réussi → RE-VÉRIFIER s'il y a d'autres jets nécessaires
-    # (par exemple, zone de contrôle si action = :move)
     case check_action_requirements(
            state,
            pending_roll.action,
@@ -380,7 +379,8 @@ defp resolve_intimidation_roll(state, roll_result, pending_roll) do
          ) do
       {:requires_roll, new_pending_roll} ->
         # 🎲 Un 2ème jet est nécessaire (zone de contrôle)
-        {:requires_second_roll, new_pending_roll}
+        # ✅ FIX : On retourne le STATE modifié
+        {:requires_second_roll, state, new_pending_roll}
 
       :ok ->
         # ✅ Pas d'autre jet nécessaire, exécuter l'action
@@ -388,7 +388,9 @@ defp resolve_intimidation_roll(state, roll_result, pending_roll) do
     end
   else
     # ❌ Jet raté → Marquer l'unité comme activée sans exécuter l'action
-    activated_unit = %{unit | activated: true}
+    # ✅ FIX : Récupérer l'unité MISE À JOUR depuis state.board
+    {:ok, updated_unit} = Board.get_unit(state.board, pending_roll.from_pos)
+    activated_unit = %{updated_unit | activated: true}
     final_board = Map.put(state.board, pending_roll.from_pos, activated_unit)
 
     # Retirer le dé du pool

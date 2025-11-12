@@ -345,7 +345,6 @@ def handle_call({:resolve_dice_roll, player_id, roll_result}, _from, state) do
 
   if player_number == state.state.current_player && state.state.pending_roll do
     case GameLogic.resolve_dice_roll(state.state, roll_result, state.state.pending_roll) do
-      # ✅ Action exécutée avec succès
       {:ok, new_game_state} ->
         # Nettoyer le pending_roll
         final_state = Map.put(new_game_state, :pending_roll, nil)
@@ -363,9 +362,10 @@ def handle_call({:resolve_dice_roll, player_id, roll_result}, _from, state) do
         end
 
       # 🎲 UN 2ÈME JET EST NÉCESSAIRE (cascade)
-      {:requires_second_roll, new_pending_roll} ->
-        # Mettre à jour le pending_roll avec le nouveau jet
-        new_state = Map.put(state.state, :pending_roll, new_pending_roll)
+      # ✅ FIX : On récupère maintenant le state modifié
+      {:requires_second_roll, updated_state, new_pending_roll} ->
+        # Mettre à jour le pending_roll ET le state
+        new_state = Map.put(updated_state, :pending_roll, new_pending_roll)
         broadcast_game_update(state.game_id, new_state)
         {:reply, {:requires_second_roll, new_pending_roll}, %{state | state: new_state}}
 

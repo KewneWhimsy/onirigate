@@ -85,32 +85,32 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
 
   # Quand le serveur de jeu envoie une mise à jour du plateau
   @impl true
-def handle_info({:game_update, new_state}, socket) do
-  # Si un nouveau pending_roll arrive et qu'on affiche déjà le dice roller
-  if new_state.pending_roll && socket.assigns.show_dice_roller do
-    # Mettre à jour le message du roller pour le 2ème jet
-    message =
-      case new_state.pending_roll.type do
-        :intimidation ->
-          "😱 Intimidation ! Lancez le dé : 4+ pour réussir l'action"
+  def handle_info({:game_update, new_state}, socket) do
+    # Si un nouveau pending_roll arrive et qu'on affiche déjà le dice roller
+    if new_state.pending_roll && socket.assigns.show_dice_roller do
+      # Mettre à jour le message du roller pour le 2ème jet
+      message =
+        case new_state.pending_roll.type do
+          :intimidation ->
+            "😱 Intimidation ! Lancez le dé : 4+ pour réussir l'action"
 
-        :control_zone ->
-          "⚠️ Zone de contrôle ! Lancez le dé : 4+ pour vous échapper"
-      end
+          :control_zone ->
+            "⚠️ Zone de contrôle ! Lancez le dé : 4+ pour vous échapper"
+        end
 
-    {:noreply,
-     assign(socket,
-       state: new_state,
-       pending_roll: new_state.pending_roll,
-       roll_message: message,
-       roll_result: nil,
-       rolling: false
-     )}
-  else
-    # Update normal
-    {:noreply, assign(socket, state: new_state)}
+      {:noreply,
+       assign(socket,
+         state: new_state,
+         pending_roll: new_state.pending_roll,
+         roll_message: message,
+         roll_result: nil,
+         rolling: false
+       )}
+    else
+      # Update normal
+      {:noreply, assign(socket, state: new_state)}
+    end
   end
-end
 
   # Quand l'autre joueur sélectionne quelque chose (dé, unité, etc.)
   @impl true
@@ -258,40 +258,45 @@ end
 
             # 2️⃣ Si c'est notre unité → SÉLECTION
             unit.player == socket.assigns.player_number ->
-              # Si un dé est sélectionné, calcule les cases accessibles
-              if socket.assigns.selected_dice do
-                {dice_value, _} = socket.assigns.selected_dice
+              # ⚠️ Empêcher la sélection si l'unité a déjà agi
+              if unit.activated do
+                {:noreply, put_flash(socket, :error, "Cette unité a déjà agi ce tour !")}
+              else
+                # Si un dé est sélectionné, calcule les cases accessibles
+                if socket.assigns.selected_dice do
+                  {dice_value, _} = socket.assigns.selected_dice
 
-                reachable_positions =
-                  compute_reachable_positions(
-                    position,
-                    dice_value,
-                    socket.assigns.action_type,
-                    state.board,
-                    socket.assigns.player_number
+                  reachable_positions =
+                    compute_reachable_positions(
+                      position,
+                      dice_value,
+                      socket.assigns.action_type,
+                      state.board,
+                      socket.assigns.player_number
+                    )
+
+                  GameServer.notify_selection(
+                    socket.assigns.room_id,
+                    socket.assigns.player_id,
+                    :unit,
+                    position
                   )
 
-                GameServer.notify_selection(
-                  socket.assigns.room_id,
-                  socket.assigns.player_id,
-                  :unit,
-                  position
-                )
-
-                {:noreply,
-                 assign(socket,
-                   selected_unit: position,
-                   selected_destination: nil,
-                   reachable_positions: reachable_positions
-                 )}
-              else
-                # Pas de dé sélectionné : on sélectionne quand même l'unité
-                {:noreply,
-                 assign(socket,
-                   selected_unit: position,
-                   selected_destination: nil,
-                   reachable_positions: []
-                 )}
+                  {:noreply,
+                   assign(socket,
+                     selected_unit: position,
+                     selected_destination: nil,
+                     reachable_positions: reachable_positions
+                   )}
+                else
+                  # Pas de dé sélectionné : on sélectionne quand même l'unité
+                  {:noreply,
+                   assign(socket,
+                     selected_unit: position,
+                     selected_destination: nil,
+                     reachable_positions: []
+                   )}
+                end
               end
 
             # 3️⃣ Unité ennemie hors reachable → RIEN
@@ -459,59 +464,60 @@ end
   end
 
   # ✅ Confirmer le résultat du jet
-@impl true
-def handle_event("confirm_roll", _, socket) do
-  result =
-    GameServer.resolve_dice_roll(
-      socket.assigns.room_id,
-      socket.assigns.player_id,
-      socket.assigns.roll_result
-    )
-
-  case result do
-    {:ok, new_state} ->
-      GameServer.notify_selection(
+  @impl true
+  def handle_event("confirm_roll", _, socket) do
+    result =
+      GameServer.resolve_dice_roll(
         socket.assigns.room_id,
         socket.assigns.player_id,
-        :clear,
-        nil
+        socket.assigns.roll_result
       )
-      {:noreply,
-       assign(socket,
-         state: new_state,
-         show_dice_roller: false,
-         pending_roll: nil,
-         roll_result: nil,
-         roll_message: nil,
-         rolling: false,
-         selected_dice: nil,
-         selected_unit: nil,
-         selected_destination: nil,
-         reachable_positions: []
-       )}
 
-    {:requires_second_roll, new_pending_roll} ->
-      # Ici, le serveur a déjà mis à jour l'état et l'a envoyé via PubSub.
-      # On attend la mise à jour via `handle_info({:game_update, new_state}, socket)`.
-      # On ne fait que préparer l'interface pour le second jet.
-      message =
-        case new_pending_roll.type do
-          :intimidation -> "😱 Intimidation ! Lancez le dé : 4+ pour réussir l'action"
-          :control_zone -> "⚠️ Zone de contrôle ! Lancez le dé : 4+ pour vous échapper"
-        end
-      {:noreply,
-       assign(socket,
-         pending_roll: new_pending_roll,
-         roll_result: nil,
-         roll_message: message,
-         rolling: false
-       )}
+    case result do
+      {:ok, new_state} ->
+        GameServer.notify_selection(
+          socket.assigns.room_id,
+          socket.assigns.player_id,
+          :clear,
+          nil
+        )
 
-    {:error, reason} ->
-      {:noreply, put_flash(socket, :error, "Erreur : #{inspect(reason)}")}
+        {:noreply,
+         assign(socket,
+           state: new_state,
+           show_dice_roller: false,
+           pending_roll: nil,
+           roll_result: nil,
+           roll_message: nil,
+           rolling: false,
+           selected_dice: nil,
+           selected_unit: nil,
+           selected_destination: nil,
+           reachable_positions: []
+         )}
+
+      {:requires_second_roll, new_pending_roll} ->
+        # Ici, le serveur a déjà mis à jour l'état et l'a envoyé via PubSub.
+        # On attend la mise à jour via `handle_info({:game_update, new_state}, socket)`.
+        # On ne fait que préparer l'interface pour le second jet.
+        message =
+          case new_pending_roll.type do
+            :intimidation -> "😱 Intimidation ! Lancez le dé : 4+ pour réussir l'action"
+            :control_zone -> "⚠️ Zone de contrôle ! Lancez le dé : 4+ pour vous échapper"
+          end
+
+        {:noreply,
+         assign(socket,
+           pending_roll: new_pending_roll,
+           roll_result: nil,
+           roll_message: message,
+           rolling: false
+         )}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Erreur : #{inspect(reason)}")}
+    end
   end
-end
-
 
   # 5️⃣ Passer son tour
   @impl true
@@ -799,22 +805,26 @@ end
                 </p>
                 <p>
                   Action :
-                  <span class={[
-                    "font-bold px-2 py-1 rounded",
-                    @action_type == :move && "bg-purple-500/30 text-purple-300",
-                    @action_type == :push && "bg-purple-500/30 text-purple-300",
-                    @action_type == :attack && "bg-orange-500/30 text-orange-300",
-                    @action_type == :intimidate && "bg-orange-500/30 text-orange-300",
-                    @action_type == :charge && "bg-red-500/30 text-red-300"
-                  ]}>
-                    <%= case @action_type do %>
-                      <% :move -> %>Move 🔄
-                      <% :push -> %>Push 👊
-                      <% :attack -> %>Attack ⚔️
-                      <% :intimidate -> %>Intimidate 😱
-                      <% :charge -> %>Charge ⚡
-                    <% end %>
-                  </span>
+                  <%= if @selected_dice do %>
+                    <span class={[
+                      "font-bold px-2 py-1 rounded",
+                      @action_type == :move && "bg-purple-500/30 text-purple-300",
+                      @action_type == :push && "bg-purple-500/30 text-purple-300",
+                      @action_type == :attack && "bg-orange-500/30 text-orange-300",
+                      @action_type == :intimidate && "bg-orange-500/30 text-orange-300",
+                      @action_type == :charge && "bg-red-500/30 text-red-300"
+                    ]}>
+                      <%= case @action_type do %>
+                        <% :move -> %>Move 🔄
+                        <% :push -> %>Push 👊
+                        <% :attack -> %>Attack ⚔️
+                        <% :intimidate -> %>Intimidate 😱
+                        <% :charge -> %>Charge ⚡
+                      <% end %>
+                    </span>
+                  <% else %>
+                    "—"
+                  <% end %>
                 </p>
               </div>
             </div>
@@ -876,6 +886,7 @@ end
                         %Unit{player: enemy_player} when enemy_player != @player_number -> true
                         _ -> false
                       end %>
+                    <% is_activated = unit && unit.activated %>
                     <button
                       phx-click="select_cell"
                       phx-value-row={row}
@@ -883,6 +894,7 @@ end
                       disabled={@state.current_player != @player_number}
                       class={[
                         "aspect-square flex items-center justify-center text-2xl rounded transition-all",
+                        is_activated && "opacity-60",
                         is_selected && "ring-4 ring-yellow-400 z-10 bg-yellow-500/20",
                         is_destination && (
                           if is_enemy_unit do
@@ -1078,5 +1090,4 @@ end
 
   defp render_unit(%Unit{type: :healer, player: 2, intimidated: true}), do: "💔"  # Noir pour le healer intimidé
   defp render_unit(%Unit{type: :healer, player: 2}), do: "❤️"
-
 end
