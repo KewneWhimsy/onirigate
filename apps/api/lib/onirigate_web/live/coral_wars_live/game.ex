@@ -833,7 +833,14 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
                       class={[
                         "aspect-square flex items-center justify-center text-2xl rounded transition-all",
                         is_selected && "ring-4 ring-yellow-400 scale-110 bg-yellow-500/20",
-                        is_destination && "ring-4 ring-green-400 scale-110 bg-green-500/20",
+                        is_destination && (
+                          if is_enemy_unit do
+                            "ring-4 ring-red-400 scale-110 bg-red-500/20"
+                          else
+                            "ring-4 ring-green-400 scale-110 bg-green-500/20"
+                          end
+                        ),
+
                         is_reachable && not is_selected && not is_destination &&
                           "bg-cyan-500/30 hover:bg-cyan-500/50 ring-2 ring-cyan-400",
                         is_opponent_selected && "ring-2 ring-orange-400",
