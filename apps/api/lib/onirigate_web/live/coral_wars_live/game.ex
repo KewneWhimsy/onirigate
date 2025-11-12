@@ -742,7 +742,20 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
               <h3 class="text-lg font-bold text-white mb-3">📋 Tes sélections</h3>
               <div class="text-slate-300 text-sm space-y-1">
                 <p>Dé : {if @selected_dice, do: elem(@selected_dice, 0), else: "—"}</p>
-                <p>Unité : {if @selected_unit, do: inspect(@selected_unit), else: "—"}</p>
+                <p> Unité :
+                  <%= if @selected_unit do %>
+                    <%= inspect(@selected_unit) %>
+                    <%# Vérifie si l'unité est intimidée/étourdie %>
+                    <%= case Board.get_unit(@state.board, @selected_unit) do %>
+                      <% {:ok, %Unit{intimidated: true}} -> %>
+                      <span class="text-red-500 animate-pulse"> 😱</span>
+                      <% _ -> %>
+                    ""
+                  <% end %>
+                  <% else %>
+                    "—"
+                  <% end %>
+                </p>
                 <p>
                   Destination : {if @selected_destination, do: inspect(@selected_destination), else: "—"}
                 </p>
@@ -832,17 +845,17 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
                       disabled={@state.current_player != @player_number}
                       class={[
                         "aspect-square flex items-center justify-center text-2xl rounded transition-all",
-                        is_selected && "ring-4 ring-yellow-400 scale-110 bg-yellow-500/20",
+                        is_selected && "ring-4 ring-yellow-400 z-10 bg-yellow-500/20",
                         is_destination && (
                           if is_enemy_unit do
-                            "ring-4 ring-red-400 scale-110 bg-red-500/20"
+                            "ring-4 ring-red-400 bg-red-500/20 z-9"
                           else
-                            "ring-4 ring-green-400 scale-110 bg-green-500/20"
+                            "ring-4 ring-green-400 bg-green-500/20 z-9"
                           end
                         ),
 
                         is_reachable && not is_selected && not is_destination &&
-                          "bg-cyan-500/30 hover:bg-cyan-500/50 ring-2 ring-cyan-400",
+                          "bg-cyan-500/30 animate-pulse hover:bg-cyan-500/50 ring-2 ring-cyan-400",
                         is_opponent_selected && "ring-2 ring-orange-400",
                         not is_selected && not is_destination && not is_reachable && not is_opponent_selected &&
                           "bg-slate-800 hover:bg-slate-700",
@@ -1003,12 +1016,29 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
   end
 
   defp render_unit(nil), do: ""
+
+  defp render_unit(%Unit{type: :baby, player: 1, intimidated: true}), do: "🐟"  # Violet pour le bébé intimidé
   defp render_unit(%Unit{type: :baby, player: 1}), do: "🐬"
+
+  defp render_unit(%Unit{type: :baby, player: 2, intimidated: true}), do: "🐠"  # Noir pour le bébé intimidé
   defp render_unit(%Unit{type: :baby, player: 2}), do: "🦈"
+
+  defp render_unit(%Unit{type: :basic, player: 1, intimidated: true}), do: "🟣"  # Violet pour le bleu intimidé
   defp render_unit(%Unit{type: :basic, player: 1}), do: "🔵"
+
+  defp render_unit(%Unit{type: :basic, player: 2, intimidated: true}), do: "🟤"  # Noir pour le rouge intimidé
   defp render_unit(%Unit{type: :basic, player: 2}), do: "🔴"
+
+  defp render_unit(%Unit{type: :brute, player: 1, intimidated: true}), do: "🧸"  # Violet pour le brute intimidé
   defp render_unit(%Unit{type: :brute, player: 1}), do: "💪"
+
+  defp render_unit(%Unit{type: :brute, player: 2, intimidated: true}), do: "💫"  # Noir pour le brute intimidé
   defp render_unit(%Unit{type: :brute, player: 2}), do: "💥"
-  defp render_unit(%Unit{type: :healer, player: 1}), do: "💚"
+
+  defp render_unit(%Unit{type: :healer, player: 1, intimidated: true}), do: "💜"  # Violet pour le healer intimidé
+  defp render_unit(%Unit{type: :healer, player: 1}), do: "💙"
+
+  defp render_unit(%Unit{type: :healer, player: 2, intimidated: true}), do: "💔"  # Noir pour le healer intimidé
   defp render_unit(%Unit{type: :healer, player: 2}), do: "❤️"
+
 end
