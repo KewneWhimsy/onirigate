@@ -262,6 +262,12 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
               if unit.activated do
                 {:noreply, put_flash(socket, :error, "Cette unité a déjà agi ce tour !")}
               else
+                GameServer.notify_selection(
+                    socket.assigns.room_id,
+                    socket.assigns.player_id,
+                    :unit,
+                    position
+                  )
                 # Si un dé est sélectionné, calcule les cases accessibles
                 if socket.assigns.selected_dice do
                   {dice_value, _} = socket.assigns.selected_dice
@@ -274,13 +280,6 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
                       state.board,
                       socket.assigns.player_number
                     )
-
-                  GameServer.notify_selection(
-                    socket.assigns.room_id,
-                    socket.assigns.player_id,
-                    :unit,
-                    position
-                  )
 
                   {:noreply,
                    assign(socket,
