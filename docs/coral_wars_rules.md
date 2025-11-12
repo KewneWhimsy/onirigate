@@ -16,7 +16,7 @@ Terminer un tour avec le Baby dans la rangée adverse OU tuer le Baby adverse. L
 
 ### DEPLOYMENT
 1. Chaque joueur lance un dé. Le score le plus élevé désigne le **Starting Player**
-2. Les joueurs placent alternativement leurs **Coral Reef**, en commençant par le Starting Player
+2. Les joueurs placent alternativement leurs unités, en commençant par le Starting Player
 3. Le Starting Player place ensuite une unité Basique ou Spéciale dans les **deux rangées arrière** de son côté
 4. Le **Baby doit être déployé dans la dernière rangée**
 5. Les joueurs alternent le placement jusqu'à ce que toutes les unités soient déployées
