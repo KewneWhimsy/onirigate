@@ -436,44 +436,51 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
   end
 
   # ✅ Confirmer le résultat du jet
-  @impl true
-  def handle_event("confirm_roll", _, socket) do
-    case GameServer.resolve_dice_roll(
-           socket.assigns.room_id,
-           socket.assigns.player_id,
-           socket.assigns.roll_result
-         ) do
-      {:ok, _new_state} ->
-        # Nettoyer l'interface
-        GameServer.notify_selection(
-          socket.assigns.room_id,
-          socket.assigns.player_id,
-          :clear,
-          nil
-        )
+@impl true
+def handle_event("confirm_roll", _, socket) do
+  IO.puts("🎯 CONFIRM_ROLL appelé - roll_result: #{inspect(socket.assigns.roll_result)}")
+  IO.puts("🎯 pending_roll: #{inspect(socket.assigns.pending_roll)}")
 
-        {:noreply,
-         assign(socket,
-           show_dice_roller: false,
-           pending_roll: nil,
-           roll_result: nil,
-           roll_message: nil,
-           rolling: false,
-           # Reset des sélections
-           selected_dice: nil,
-           selected_unit: nil,
-           selected_destination: nil,
-           reachable_positions: [],
-           action_type: :move
-         )}
+  result = GameServer.resolve_dice_roll(
+    socket.assigns.room_id,
+    socket.assigns.player_id,
+    socket.assigns.roll_result
+  )
 
-      {:error, reason} ->
-        {:noreply,
-         socket
-         |> put_flash(:error, "Erreur lors de la résolution : #{inspect(reason)}")
-         |> assign(show_dice_roller: false)}
-    end
+  IO.puts("🎯 Résultat resolve: #{inspect(result)}")
+
+  case result do
+    {:ok, new_state} ->
+      IO.puts("✅ OK - Nouveau current_player: #{new_state.current_player}")
+
+      # Nettoyer l'interface
+      GameServer.notify_selection(
+        socket.assigns.room_id,
+        socket.assigns.player_id,
+        :clear,
+        nil
+      )
+
+      {:noreply,
+       assign(socket,
+         state: new_state,  # ✅ Met à jour l'état
+         show_dice_roller: false,
+         pending_roll: nil,
+         roll_result: nil,
+         roll_message: nil,
+         rolling: false,
+         selected_dice: nil,
+         selected_unit: nil,
+         selected_destination: nil,
+         reachable_positions: [],
+         action_type: :move
+       )}
+
+    {:error, reason} ->
+      IO.puts("❌ ERREUR: #{inspect(reason)}")
+      {:noreply, put_flash(socket, :error, "Erreur : #{inspect(reason)}")}
   end
+end
 
   # 5️⃣ Passer son tour
   @impl true

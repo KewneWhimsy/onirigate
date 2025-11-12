@@ -306,7 +306,7 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
 
         # Si l'action est MOVE, on vérifie les Control Zones
         action_type == :move ->
-          check_control_zone_escape(state, unit, from_pos, params.to_pos)
+            check_control_zone_escape(state, unit, from_pos, params.to_pos, params)
 
         # Sinon, on peut exécuter directement
         true ->
@@ -315,37 +315,34 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
     end
   end
 
-  # Détecte si l'unité quitte une Control Zone
-  defp check_control_zone_escape(state, unit, from_pos, to_pos) do
-    # Baby ne déclenche jamais de Control Zone
-    if unit.type == :baby do
-      :ok
-    else
-      # Trouve les ennemis en Control Zone de la position de départ
-      enemies_in_control =
-        Board.control_zone(state.board, from_pos)
-        |> Enum.filter(fn pos ->
-          case state.board[pos] do
-            %Unit{player: p} when p != unit.player -> true
-            _ -> false
-          end
-        end)
+  defp check_control_zone_escape(state, unit, from_pos, to_pos, params) do
+  if unit.type == :baby do
+    :ok
+  else
+    enemies_in_control =
+      Board.control_zone(state.board, from_pos)
+      |> Enum.filter(fn pos ->
+        case state.board[pos] do
+          %Unit{player: p} when p != unit.player -> true
+          _ -> false
+        end
+      end)
 
-      if length(enemies_in_control) > 0 do
-        {:requires_roll,
-         %{
-           type: :control_zone,
-           action: :move,
-           from_pos: from_pos,
-           params: %{to_pos: to_pos},
-           unit_id: unit.id,
-           enemies: enemies_in_control
-         }}
-      else
-        :ok
-      end
+    if length(enemies_in_control) > 0 do
+      {:requires_roll,
+       %{
+         type: :control_zone,
+         action: :move,
+         from_pos: from_pos,
+         params: params,
+         unit_id: unit.id,
+         enemies: enemies_in_control
+       }}
+    else
+      :ok
     end
   end
+end
 
   # NOUVELLE FONCTION : Résoudre un jet de dés
   def resolve_dice_roll(state, roll_result, pending_roll) do
