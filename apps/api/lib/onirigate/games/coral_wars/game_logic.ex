@@ -289,137 +289,119 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
     end
   end
 
-  # Vérifie si un jet de dés est nécessaire avant l'action
+  @doc """
+  Vérifie si un jet de dés est nécessaire avant l'action.
+  Retourne {:requires_roll, pending_roll} ou :ok
+  """
   def check_action_requirements(state, action_type, from_pos, params) do
     with {:ok, unit} <- Board.get_unit(state.board, from_pos) do
-      cond do
-        # Si l'unité est intimidée, on demande un jet
-        unit.intimidated ->
-          {:requires_roll,
-           %{
-             type: :intimidation,
-             action: action_type,
-             from_pos: from_pos,
-             params: params,
-             unit_id: unit.id
-           }}
-
-        # Si l'action est MOVE, on vérifie les Control Zones
-        action_type == :move ->
-            check_control_zone_escape(state, unit, from_pos, params.to_pos, params)
-
-        # Sinon, on peut exécuter directement
-        true ->
+      # 1️⃣ Priorité : vérifier l'intimidation
+      if unit.intimidated do
+        {:requires_roll,
+         %{
+           type: :intimidation,
+           action: action_type,
+           from_pos: from_pos,
+           params: params,
+           unit_id: unit.id
+         }}
+      else
+        # 2️⃣ Si pas intimidé, vérifier la zone de contrôle (seulement pour MOVE)
+        if action_type == :move do
+          check_control_zone_escape(state, unit, from_pos, params.to_pos, params)
+        else
           :ok
+        end
       end
     end
   end
 
   defp check_control_zone_escape(state, unit, from_pos, to_pos, params) do
-  if unit.type == :baby do
-    :ok
-  else
-    enemies_in_control =
-      Board.control_zone(state.board, from_pos)
-      |> Enum.filter(fn pos ->
-        case state.board[pos] do
-          %Unit{player: p} when p != unit.player -> true
-          _ -> false
-        end
-      end)
-
-    if length(enemies_in_control) > 0 do
-      {:requires_roll,
-       %{
-         type: :control_zone,
-         action: :move,
-         from_pos: from_pos,
-         params: params,
-         unit_id: unit.id,
-         enemies: enemies_in_control
-       }}
-    else
+    if unit.type == :baby do
       :ok
+    else
+      enemies_in_control =
+        Board.control_zone(state.board, from_pos)
+        |> Enum.filter(fn pos ->
+          case state.board[pos] do
+            %Unit{player: p} when p != unit.player -> true
+            _ -> false
+          end
+        end)
+
+      if length(enemies_in_control) > 0 do
+        {:requires_roll,
+         %{
+           type: :control_zone,
+           action: :move,
+           from_pos: from_pos,
+           params: params,
+           unit_id: unit.id,
+           enemies: enemies_in_control
+         }}
+      else
+        :ok
+      end
     end
   end
-end
 
   # NOUVELLE FONCTION : Résoudre un jet de dés
   def resolve_dice_roll(state, roll_result, pending_roll) do
-    case pending_roll.type do
-      :intimidation ->
-        resolve_intimidation_roll(state, roll_result, pending_roll)
+  case pending_roll.type do
+    :intimidation ->
+      resolve_intimidation_roll(state, roll_result, pending_roll)
 
-      :control_zone ->
-        resolve_control_zone_roll(state, roll_result, pending_roll)
-    end
+    :control_zone ->
+      resolve_control_zone_roll(state, roll_result, pending_roll)
   end
+end
 
   # Résolution du jet d'intimidation
-  defp resolve_intimidation_roll(state, roll_result, pending_roll) do
-    # Récupérer l'unité
-    {:ok, unit} = Board.get_unit(state.board, pending_roll.from_pos)
+defp resolve_intimidation_roll(state, roll_result, pending_roll) do
+  # Récupérer l'unité
+  {:ok, unit} = Board.get_unit(state.board, pending_roll.from_pos)
 
-    # Retirer le flag intimidated (dans tous les cas)
-    board_without_intimidation =
-      Map.update!(state.board, pending_roll.from_pos, fn u ->
-        %{u | intimidated: false}
-      end)
+  # ✅ Retirer le flag intimidated (dans TOUS les cas)
+  board_without_intimidation =
+    Map.update!(state.board, pending_roll.from_pos, fn u ->
+      %{u | intimidated: false}
+    end)
 
-    state = %{state | board: board_without_intimidation}
+  state = %{state | board: board_without_intimidation}
 
-    if roll_result >= 4 do
-      # ✅ Jet réussi → Exécuter l'action normalement
-      case pending_roll.action do
-        :move ->
-          move(
-            state,
-            pending_roll.from_pos,
-            pending_roll.params.to_pos,
-            pending_roll.params.dice_value
-          )
+  if roll_result >= 4 do
+    # ✅ Jet réussi → RE-VÉRIFIER s'il y a d'autres jets nécessaires
+    # (par exemple, zone de contrôle si action = :move)
+    case check_action_requirements(
+           state,
+           pending_roll.action,
+           pending_roll.from_pos,
+           pending_roll.params
+         ) do
+      {:requires_roll, new_pending_roll} ->
+        # 🎲 Un 2ème jet est nécessaire (zone de contrôle)
+        {:requires_second_roll, new_pending_roll}
 
-        :push ->
-          push(
-            state,
-            pending_roll.from_pos,
-            pending_roll.params.direction,
-            pending_roll.params.dice_value
-          )
-
-        :attack ->
-          attack(
-            state,
-            pending_roll.from_pos,
-            pending_roll.params.target_pos,
-            pending_roll.params.dice_value
-          )
-
-        :charge ->
-          charge(
-            state,
-            pending_roll.from_pos,
-            pending_roll.params.direction,
-            pending_roll.params.dice_value
-          )
-      end
-    else
-      # ❌ Jet raté → Marquer l'unité comme activée sans exécuter l'action
-      activated_unit = %{unit | activated: true}
-      final_board = Map.put(state.board, pending_roll.from_pos, activated_unit)
-
-      # Retirer le dé du pool
-      new_pool = List.delete(state.dice_pool, pending_roll.params.dice_value)
-
-      new_state = %{state | board: final_board, dice_pool: new_pool}
-      new_state = change_player(new_state)
-      {:ok, new_state}
+      :ok ->
+        # ✅ Pas d'autre jet nécessaire, exécuter l'action
+        execute_action(state, pending_roll)
     end
+  else
+    # ❌ Jet raté → Marquer l'unité comme activée sans exécuter l'action
+    activated_unit = %{unit | activated: true}
+    final_board = Map.put(state.board, pending_roll.from_pos, activated_unit)
+
+    # Retirer le dé du pool
+    new_pool = List.delete(state.dice_pool, pending_roll.params.dice_value)
+
+    new_state = %{state | board: final_board, dice_pool: new_pool}
+    new_state = change_player(new_state)
+    {:ok, new_state}
   end
+end
 
   # Résolution du jet de Control Zone
 defp resolve_control_zone_roll(state, roll_result, pending_roll) do
-  # Récupérer le dice_value depuis pending_roll.params
   dice_value = Map.get(pending_roll.params, :dice_value)
 
   if roll_result >= 4 do
@@ -431,7 +413,7 @@ defp resolve_control_zone_roll(state, roll_result, pending_roll) do
     stunned_unit = %{unit | stunned: true, activated: true}
     final_board = Map.put(state.board, pending_roll.from_pos, stunned_unit)
 
-    # Retirer le dé du pool (seulement si dice_value existe)
+    # Retirer le dé du pool
     new_pool = if dice_value, do: List.delete(state.dice_pool, dice_value), else: state.dice_pool
 
     new_state = %{state | board: final_board, dice_pool: new_pool}
@@ -491,6 +473,50 @@ end
     end
   end
 
+  # Helper pour exécuter l'action selon le type
+defp execute_action(state, pending_roll) do
+  case pending_roll.action do
+    :move ->
+      move(
+        state,
+        pending_roll.from_pos,
+        pending_roll.params.to_pos,
+        pending_roll.params.dice_value
+      )
+
+    :push ->
+      push(
+        state,
+        pending_roll.from_pos,
+        pending_roll.params.direction,
+        pending_roll.params.dice_value
+      )
+
+    :attack ->
+      attack(
+        state,
+        pending_roll.from_pos,
+        pending_roll.params.target_pos,
+        pending_roll.params.dice_value
+      )
+
+    :charge ->
+      charge(
+        state,
+        pending_roll.from_pos,
+        pending_roll.params.direction,
+        pending_roll.params.dice_value
+      )
+
+    :intimidate ->
+      intimidate(
+        state,
+        pending_roll.from_pos,
+        pending_roll.params.target_pos,
+        pending_roll.params.dice_value
+      )
+  end
+end
   # ========== VALIDATIONS COMMUNES ==========
 
   defp check_dice_value(dice_value, allowed_values) do

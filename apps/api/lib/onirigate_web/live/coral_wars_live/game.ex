@@ -85,9 +85,32 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
 
   # Quand le serveur de jeu envoie une mise à jour du plateau
   @impl true
-  def handle_info({:game_update, new_state}, socket) do
+def handle_info({:game_update, new_state}, socket) do
+  # Si un nouveau pending_roll arrive et qu'on affiche déjà le dice roller
+  if new_state.pending_roll && socket.assigns.show_dice_roller do
+    # Mettre à jour le message du roller pour le 2ème jet
+    message =
+      case new_state.pending_roll.type do
+        :intimidation ->
+          "😱 Intimidation ! Lancez le dé : 4+ pour réussir l'action"
+
+        :control_zone ->
+          "⚠️ Zone de contrôle ! Lancez le dé : 4+ pour vous échapper"
+      end
+
+    {:noreply,
+     assign(socket,
+       state: new_state,
+       pending_roll: new_state.pending_roll,
+       roll_message: message,
+       roll_result: nil,
+       rolling: false
+     )}
+  else
+    # Update normal
     {:noreply, assign(socket, state: new_state)}
   end
+end
 
   # Quand l'autre joueur sélectionne quelque chose (dé, unité, etc.)
   @impl true
@@ -438,32 +461,24 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
   # ✅ Confirmer le résultat du jet
 @impl true
 def handle_event("confirm_roll", _, socket) do
-  IO.puts("🎯 CONFIRM_ROLL appelé - roll_result: #{inspect(socket.assigns.roll_result)}")
-  IO.puts("🎯 pending_roll: #{inspect(socket.assigns.pending_roll)}")
-
-  result = GameServer.resolve_dice_roll(
-    socket.assigns.room_id,
-    socket.assigns.player_id,
-    socket.assigns.roll_result
-  )
-
-  IO.puts("🎯 Résultat resolve: #{inspect(result)}")
+  result =
+    GameServer.resolve_dice_roll(
+      socket.assigns.room_id,
+      socket.assigns.player_id,
+      socket.assigns.roll_result
+    )
 
   case result do
     {:ok, new_state} ->
-      IO.puts("✅ OK - Nouveau current_player: #{new_state.current_player}")
-
-      # Nettoyer l'interface
       GameServer.notify_selection(
         socket.assigns.room_id,
         socket.assigns.player_id,
         :clear,
         nil
       )
-
       {:noreply,
        assign(socket,
-         state: new_state,  # ✅ Met à jour l'état
+         state: new_state,
          show_dice_roller: false,
          pending_roll: nil,
          roll_result: nil,
@@ -472,15 +487,31 @@ def handle_event("confirm_roll", _, socket) do
          selected_dice: nil,
          selected_unit: nil,
          selected_destination: nil,
-         reachable_positions: [],
-         action_type: :move
+         reachable_positions: []
+       )}
+
+    {:requires_second_roll, new_pending_roll} ->
+      # Ici, le serveur a déjà mis à jour l'état et l'a envoyé via PubSub.
+      # On attend la mise à jour via `handle_info({:game_update, new_state}, socket)`.
+      # On ne fait que préparer l'interface pour le second jet.
+      message =
+        case new_pending_roll.type do
+          :intimidation -> "😱 Intimidation ! Lancez le dé : 4+ pour réussir l'action"
+          :control_zone -> "⚠️ Zone de contrôle ! Lancez le dé : 4+ pour vous échapper"
+        end
+      {:noreply,
+       assign(socket,
+         pending_roll: new_pending_roll,
+         roll_result: nil,
+         roll_message: message,
+         rolling: false
        )}
 
     {:error, reason} ->
-      IO.puts("❌ ERREUR: #{inspect(reason)}")
       {:noreply, put_flash(socket, :error, "Erreur : #{inspect(reason)}")}
   end
 end
+
 
   # 5️⃣ Passer son tour
   @impl true
