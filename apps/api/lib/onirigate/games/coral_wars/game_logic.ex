@@ -421,29 +421,27 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
   end
 
   # Résolution du jet de Control Zone
-  defp resolve_control_zone_roll(state, roll_result, pending_roll) do
-    if roll_result >= 4 do
-      # ✅ Jet réussi → L'unité s'échappe et se déplace
-      move(
-        state,
-        pending_roll.from_pos,
-        pending_roll.params.to_pos,
-        pending_roll.params.dice_value
-      )
-    else
-      # ❌ Jet raté → L'unité devient Stunt et ne bouge pas
-      {:ok, unit} = Board.get_unit(state.board, pending_roll.from_pos)
-      stunned_unit = %{unit | stunned: true, activated: true}
-      final_board = Map.put(state.board, pending_roll.from_pos, stunned_unit)
+defp resolve_control_zone_roll(state, roll_result, pending_roll) do
+  # Récupérer le dice_value depuis pending_roll.params
+  dice_value = Map.get(pending_roll.params, :dice_value)
 
-      # Retirer le dé du pool
-      new_pool = List.delete(state.dice_pool, pending_roll.params.dice_value)
+  if roll_result >= 4 do
+    # ✅ Jet réussi → L'unité s'échappe et se déplace
+    move(state, pending_roll.from_pos, pending_roll.params.to_pos, dice_value)
+  else
+    # ❌ Jet raté → L'unité devient Stunt et ne bouge pas
+    {:ok, unit} = Board.get_unit(state.board, pending_roll.from_pos)
+    stunned_unit = %{unit | stunned: true, activated: true}
+    final_board = Map.put(state.board, pending_roll.from_pos, stunned_unit)
 
-      new_state = %{state | board: final_board, dice_pool: new_pool}
-      new_state = change_player(new_state)
-      {:ok, new_state}
-    end
+    # Retirer le dé du pool (seulement si dice_value existe)
+    new_pool = if dice_value, do: List.delete(state.dice_pool, dice_value), else: state.dice_pool
+
+    new_state = %{state | board: final_board, dice_pool: new_pool}
+    new_state = change_player(new_state)
+    {:ok, new_state}
   end
+end
 
   @doc """
   Exécute une action CHARGE (dé 6)

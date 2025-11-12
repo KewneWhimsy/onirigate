@@ -340,6 +340,36 @@ def handle_call({:execute_intimidate, player_id, dice_value, from_pos, target_po
 end
 
 @impl true
+def handle_call({:resolve_dice_roll, player_id, roll_result}, _from, state) do
+  player_number = state.players[player_id]
+
+  if player_number == state.state.current_player && state.state.pending_roll do
+    case GameLogic.resolve_dice_roll(state.state, roll_result, state.state.pending_roll) do
+      {:ok, new_game_state} ->
+        # Nettoyer le pending_roll
+        final_state = Map.put(new_game_state, :pending_roll, nil)
+
+        # Vérifier victoire
+        case GameLogic.check_victory(final_state) do
+          {:winner, winner} ->
+            final_state = %{final_state | phase: :finished, winner: winner}
+            broadcast_game_update(state.game_id, final_state)
+            {:reply, {:ok, final_state}, %{state | state: final_state}}
+
+          :continue ->
+            broadcast_game_update(state.game_id, final_state)
+            {:reply, {:ok, final_state}, %{state | state: final_state}}
+        end
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  else
+    {:reply, {:error, :not_your_turn}, state}
+  end
+end
+
+@impl true
 def handle_call({:execute_charge, player_id, dice_value, from_pos, direction}, _from, state) do
   player_number = state.players[player_id]
 
