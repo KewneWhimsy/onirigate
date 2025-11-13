@@ -16,7 +16,7 @@ Terminer un tour avec le Baby dans la rangée adverse OU tuer le Baby adverse. L
 
 ### DEPLOYMENT
 1. Chaque joueur lance un dé. Le score le plus élevé désigne le **Starting Player**
-2. Les joueurs placent alternativement leurs unités, en commençant par le Starting Player
+2. Les joueurs placent alternativement leurs **Coral Reef terrains**, en commençant par le Starting Player
 3. Le Starting Player place ensuite une unité Basique ou Spéciale dans les **deux rangées arrière** de son côté
 4. Le **Baby doit être déployé dans la dernière rangée**
 5. Les joueurs alternent le placement jusqu'à ce que toutes les unités soient déployées
@@ -60,7 +60,7 @@ Si un joueur ne peut pas ou ne souhaite pas sélectionner un dé (toutes ses uni
 - Pousser une unité adjacente (alliée ou ennemie) de **1 case orthogonalement** dans la direction opposée à l'unité
 
 ### ⚔️ ATTACK (4-5)
-- Doit toucher un ennemi orthogonalement ou diagonalement adjacent
+- Doit toucher un ennemi **orthogonalement adjacent**
 - L'unité touchée est **Stunt** (voir Dégâts & Control Zone)
 
 ### 😱 INTIMIDATION (4-5)
@@ -79,13 +79,16 @@ Les tokens d'intimidation sont retirés immédiatement après qu'une unité a te
 ## IV. COMBAT & DAMAGE
 
 ### DÉGÂTS
-Les unités touchées sont automatiquement mises sur le côté. Elles sont **Stunt**. Une unité Stunt ne peut pas recevoir d'ordre de dés. Une unité Stunt peut être Poussée. Une unité Stunt touchée à nouveau est retirée du jeu.
+Les unités touchées sont automatiquement mises sur le côté. Elles sont **Stunt**. Une unité Stunt ne peut pas recevoir d'ordre de dés. Une unité Stunt compte comme un **Obstacle**. Une unité Stunt peut être Poussée. Une unité Stunt touchée à nouveau est retirée du jeu.
 
 ### CONTROL ZONE
-Chaque case orthogonalement adjacente à une unité est appelée sa **Control Zone**. Un adversaire quittant volontairement la Control Zone d'une unité à tout moment doit faire un jet :
+Chaque case orthogonalement adjacente à une unité est appelée sa **Control Zone**. Un adversaire quittant volontairement une Control Zone doit faire un jet :
 
-- **Sur 4+** : il s'échappe et l'unité tente d'attaquer
-- **Si le jet est moins que 4** : l'unité est immédiatement Stunt et ne quitte pas la case. Si plusieurs unités ont une Control Zone sur un adversaire s'échappant, **2 sur 3 des unités devront faire un jet de 6+**
+- **1 Control Zone** : jet à **4+** pour s'échapper
+- **2 Control Zones** : jet à **5+** pour s'échapper
+- **3 Control Zones** : jet à **6+** pour s'échapper
+
+Si le jet réussit, l'unité s'échappe avec succès. Si le jet échoue, l'unité est immédiatement **Stunt** et ne quitte pas la case.
 
 ⚠️ Les unités **Poussées** ne déclenchent **PAS** d'attaques de Control Zone.
 
