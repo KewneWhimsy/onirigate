@@ -263,11 +263,12 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
                 {:noreply, put_flash(socket, :error, "Cette unité a déjà agi ce tour !")}
               else
                 GameServer.notify_selection(
-                    socket.assigns.room_id,
-                    socket.assigns.player_id,
-                    :unit,
-                    position
-                  )
+                  socket.assigns.room_id,
+                  socket.assigns.player_id,
+                  :unit,
+                  position
+                )
+
                 # Si un dé est sélectionné, calcule les cases accessibles
                 if socket.assigns.selected_dice do
                   {dice_value, _} = socket.assigns.selected_dice
@@ -551,162 +552,202 @@ defmodule OnirigateWeb.CoralWarsLive.Game do
   - On ne peut PAS traverser les ennemis ni les récifs.
   - Le mouvement s'arrête si on sort du plateau ou si un ennemi/récif bloque le passage.
   """
-  defp compute_reachable_positions({row, col}, dice_value, :move, board, player_number)
-       when is_integer(dice_value) and dice_value > 0 do
-    # Les directions orthogonales (haut, bas, gauche, droite)
-    directions = [
-      # haut
-      {-1, 0},
-      # bas
-      {1, 0},
-      # gauche
-      {0, -1},
-      # droite
-      {0, 1}
-    ]
+  # 🆕 Calcul des positions accessibles selon l'action
+  defp compute_reachable_positions(selected_unit, dice_value, action_type, board, player_number) do
+    case action_type do
+      :move ->
+        # Dés 1-3 : Distance maximale = 3 cases
+        max_distance = if dice_value in [1, 2, 3], do: 3, else: 1
+        compute_move_positions(selected_unit, max_distance, board)
 
-    max_steps = if dice_value in [1, 2, 3], do: 3, else: dice_value
+      :push ->
+        compute_push_positions(selected_unit, board, player_number)
 
-    Enum.flat_map(directions, fn {dr, dc} ->
-      # On parcourt les cases dans chaque direction, jusqu'à la limite du dé
-      Enum.reduce_while(1..max_steps, [], fn step, acc ->
-        new_pos = {row + dr * step, col + dc * step}
-        {new_row, new_col} = new_pos
+      :attack ->
+        compute_attack_positions(selected_unit, board, player_number)
 
-        # Vérifie que la position est sur le plateau
-        if new_row in 1..8 and new_col in 1..8 do
-          case board[new_pos] do
-            nil ->
-              # Case vide → atteignable, on continue plus loin
-              {:cont, [new_pos | acc]}
+      :intimidate ->
+        compute_intimidate_positions(selected_unit, board, player_number)
 
-            :reef ->
-              # Récif → bloque le chemin, on s'arrête ici
-              {:halt, acc}
-
-            %Unit{player: ^player_number} ->
-              # Unité alliée → on peut traverser, mais pas s'arrêter dessus
-              {:cont, acc}
-
-            %Unit{} ->
-              # Unité ennemie → on ne peut ni s'arrêter ni passer à travers
-              {:halt, acc}
-          end
-        else
-          # Hors du plateau → on arrête la recherche dans cette direction
-          {:halt, acc}
-        end
-      end)
-      # pour garder l'ordre logique (proche → loin)
-      |> Enum.reverse()
-    end)
-  end
-
-  # Pour PUSH → seulement les unités adjacentes
-  defp compute_reachable_positions({row, col}, _dice_value, :push, board, _player_number) do
-    directions = [{-1, 0}, {1, 0}, {0, -1}, {0, 1}]
-
-    directions
-    |> Enum.map(fn {dr, dc} -> {row + dr, col + dc} end)
-    |> Enum.filter(fn {r, c} ->
-      r in 1..8 and c in 1..8 and match?(%Unit{}, board[{r, c}])
-    end)
-  end
-
-  # Pour ATTACK → ennemis adjacents (orthogonal + diagonal pour Sharks)
-  defp compute_reachable_positions({row, col}, dice_value, :attack, board, player_number)
-       when dice_value in [4, 5] do
-    case Board.get_unit(board, {row, col}) do
-      {:ok, %Unit{faction: faction}} ->
-        # Directions orthogonales (toutes les factions)
-        orthogonal = [{-1, 0}, {1, 0}, {0, -1}, {0, 1}]
-
-        # Directions diagonales (seulement pour Sharks)
-        diagonal = [{-1, -1}, {-1, 1}, {1, -1}, {1, 1}]
-
-        directions =
-          case faction do
-            :sharks -> orthogonal ++ diagonal
-            _ -> orthogonal
-          end
-
-        # Ne garder que les positions avec des ennemis
-        Enum.flat_map(directions, fn {dr, dc} ->
-          target_pos = {row + dr, col + dc}
-          {target_row, target_col} = target_pos
-
-          if target_row in 1..8 and target_col in 1..8 do
-            case board[target_pos] do
-              %Unit{player: enemy_player} when enemy_player != player_number ->
-                [target_pos]
-
-              _ ->
-                []
-            end
-          else
-            []
-          end
-        end)
-
-      _ ->
-        []
+      :charge ->
+        compute_charge_positions(selected_unit, board, player_number)
     end
   end
 
-  # Pour INTIMIDATE → ennemis jusqu'à 3 cases orthogonales
-  defp compute_reachable_positions({row, col}, dice_value, :intimidate, board, player_number)
-       when dice_value in [4, 5] do
-    # Directions orthogonales uniquement
+  # ========== MOVE avec BFS (zigzag) ==========
+  defp compute_move_positions(from_pos, max_distance, board) do
+    {:ok, unit} = Board.get_unit(board, from_pos)
+
+    # Directions selon la faction
+    directions =
+      case unit.faction do
+        :dolphins ->
+          # Orthogonal ET diagonal
+          [{-1, 0}, {1, 0}, {0, -1}, {0, 1}, {-1, -1}, {-1, 1}, {1, -1}, {1, 1}]
+
+        _ ->
+          # Seulement orthogonal
+          [{-1, 0}, {1, 0}, {0, -1}, {0, 1}]
+      end
+
+    bfs_explore(from_pos, max_distance, directions, board, MapSet.new([from_pos]))
+  end
+
+  defp bfs_explore(start_pos, max_distance, directions, board, visited) do
+    queue = :queue.from_list([{start_pos, max_distance}])
+    do_bfs(queue, directions, board, visited, MapSet.new())
+  end
+
+  defp do_bfs(queue, directions, board, visited, reachable) do
+    case :queue.out(queue) do
+      {{:value, {current_pos, distance_left}}, new_queue} ->
+        if distance_left > 0 do
+          {from_row, from_col} = current_pos
+
+          neighbors =
+            Enum.flat_map(directions, fn {dr, dc} ->
+              next_pos = {from_row + dr, from_col + dc}
+
+              if Board.valid_position?(next_pos) &&
+                   not MapSet.member?(visited, next_pos) &&
+                   is_nil(board[next_pos]) do
+                [{next_pos, distance_left - 1}]
+              else
+                []
+              end
+            end)
+
+          new_queue =
+            Enum.reduce(neighbors, new_queue, fn neighbor, q ->
+              :queue.in(neighbor, q)
+            end)
+
+          new_visited =
+            Enum.reduce(neighbors, visited, fn {pos, _}, v ->
+              MapSet.put(v, pos)
+            end)
+
+          new_reachable =
+            Enum.reduce(neighbors, reachable, fn {pos, _}, r ->
+              MapSet.put(r, pos)
+            end)
+
+          do_bfs(new_queue, directions, board, new_visited, new_reachable)
+        else
+          do_bfs(new_queue, directions, board, visited, reachable)
+        end
+
+      {:empty, _} ->
+        MapSet.to_list(reachable)
+    end
+  end
+
+  # ========== PUSH ==========
+  defp compute_push_positions(from_pos, board, player_number) do
+    {row, col} = from_pos
+
+    # 4 directions orthogonales
     directions = [{-1, 0}, {1, 0}, {0, -1}, {0, 1}]
 
     Enum.flat_map(directions, fn {dr, dc} ->
-      # Parcourir jusqu'à 3 cases dans chaque direction
-      Enum.reduce_while(1..3, [], fn step, acc ->
-        target_pos = {row + dr * step, col + dc * step}
-        {target_row, target_col} = target_pos
+      # Position de l'unité à pousser
+      push_pos = {row + dr, col + dc}
+      # Position finale après le push
+      target_pos = {row + 2 * dr, col + 2 * dc}
 
-        if target_row in 1..8 and target_col in 1..8 do
-          case board[target_pos] do
-            # Ennemi trouvé → on l'ajoute et on continue
-            %Unit{player: enemy_player} when enemy_player != player_number ->
-              {:cont, [target_pos | acc]}
-
-            # Case vide → on continue plus loin
-            nil ->
-              {:cont, acc}
-
-            # Allié ou récif → bloque la ligne de vue
-            _ ->
-              {:halt, acc}
+      # Vérifie : unité adjacente + case libre derrière
+      case board[push_pos] do
+        %Unit{} ->
+          if Board.valid_position?(target_pos) && is_nil(board[target_pos]) do
+            # La destination est la position adjacente (où on pousse)
+            [push_pos]
+          else
+            []
           end
-        else
-          {:halt, acc}
-        end
-      end)
-      |> Enum.reverse()
+
+        _ ->
+          []
+      end
     end)
   end
 
-  # Pour CHARGE → ennemis adjacents orthogonalement (on clique sur l'ennemi, pas la case intermédiaire)
-  defp compute_reachable_positions({row, col}, dice_value, :charge, board, player_number)
-       when dice_value == 6 do
-    # Directions orthogonales uniquement
+  # ========== ATTACK ==========
+  defp compute_attack_positions(from_pos, board, player_number) do
+    {:ok, unit} = Board.get_unit(board, from_pos)
+    {row, col} = from_pos
+
+    # Directions selon la faction
+    directions =
+      case unit.faction do
+        :sharks ->
+          # Orthogonal ET diagonal
+          [{-1, 0}, {1, 0}, {0, -1}, {0, 1}, {-1, -1}, {-1, 1}, {1, -1}, {1, 1}]
+
+        _ ->
+          # Seulement orthogonal
+          [{-1, 0}, {1, 0}, {0, -1}, {0, 1}]
+      end
+
+    Enum.flat_map(directions, fn {dr, dc} ->
+      target_pos = {row + dr, col + dc}
+
+      case board[target_pos] do
+        %Unit{player: enemy_player} when enemy_player != player_number ->
+          [target_pos]
+
+        _ ->
+          []
+      end
+    end)
+  end
+
+  # ========== INTIMIDATE ==========
+  defp compute_intimidate_positions(from_pos, board, player_number) do
+    {row, col} = from_pos
+
+    # Seulement orthogonal, jusqu'à 3 cases
     directions = [{-1, 0}, {1, 0}, {0, -1}, {0, 1}]
 
     Enum.flat_map(directions, fn {dr, dc} ->
-      # Case intermédiaire (où l'unité va se déplacer)
-      intermediate = {row + dr, col + dc}
-      # Case de l'ennemi (2 cases dans la direction)
-      enemy_pos = {row + 2 * dr, col + 2 * dc}
-      {enemy_row, enemy_col} = enemy_pos
+      # Cherche jusqu'à 3 cases dans chaque direction
+      Enum.flat_map(1..3, fn distance ->
+        target_pos = {row + dr * distance, col + dc * distance}
 
-      # Vérifier que la case intermédiaire est vide
-      # ET qu'il y a un ennemi à la position cible
-      if enemy_row in 1..8 and enemy_col in 1..8 and is_nil(board[intermediate]) do
-        case board[enemy_pos] do
+        if Board.valid_position?(target_pos) do
+          case board[target_pos] do
+            %Unit{player: enemy_player} when enemy_player != player_number ->
+              [target_pos]
+
+            _ ->
+              []
+          end
+        else
+          []
+        end
+      end)
+    end)
+    |> Enum.uniq()
+  end
+
+  # ========== CHARGE ==========
+  defp compute_charge_positions(from_pos, board, player_number) do
+    {row, col} = from_pos
+
+    # 4 directions orthogonales
+    directions = [{-1, 0}, {1, 0}, {0, -1}, {0, 1}]
+
+    Enum.flat_map(directions, fn {dr, dc} ->
+      # Position où on va (1 case)
+      to_pos = {row + dr, col + dc}
+      # Position de l'ennemi à attaquer (2 cases)
+      target_pos = {row + 2 * dr, col + 2 * dc}
+
+      # Vérifie : case libre + ennemi à 2 cases
+      if Board.valid_position?(to_pos) && is_nil(board[to_pos]) do
+        case board[target_pos] do
           %Unit{player: enemy_player} when enemy_player != player_number ->
-            # On retourne la position de l'ENNEMI (pas la case intermédiaire)
-            [enemy_pos]
+            # La destination est la case adjacente (pas la case de l'ennemi)
+            [to_pos]
 
           _ ->
             []

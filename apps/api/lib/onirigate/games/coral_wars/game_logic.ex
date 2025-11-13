@@ -80,16 +80,40 @@ defmodule Onirigate.Games.CoralWars.GameLogic do
   end
 
   defp validate_move(state, unit, from_pos, to_pos, dice_value) do
-    with :ok <- check_dice_value(dice_value, [1, 2, 3]),
-         :ok <- check_dice_in_pool(state.dice_pool, dice_value),
-         :ok <- check_unit_can_activate(unit),
-         :ok <- check_unit_belongs_to_player(unit, state.current_player),
-         :ok <- check_not_same_position(from_pos, to_pos),
-         :ok <- check_distance(from_pos, to_pos, 3),
-         :ok <- check_path_clear(state.board, to_pos) do
-      :ok
-    end
+  with :ok <- check_dice_value(dice_value, [1, 2, 3]),
+       :ok <- check_dice_in_pool(state.dice_pool, dice_value),
+       :ok <- check_unit_can_activate(unit),
+       :ok <- check_unit_belongs_to_player(unit, state.current_player),
+       :ok <- check_not_same_position(from_pos, to_pos),
+       :ok <- check_distance(from_pos, to_pos, 3, unit.faction),
+       :ok <- check_path_clear(state.board, to_pos) do
+    :ok
   end
+end
+
+# 🆕 Distance adaptée à la faction
+defp check_distance(from_pos, to_pos, max_distance, faction) do
+  distance = calculate_distance(from_pos, to_pos, faction)
+
+  if distance <= max_distance do
+    :ok
+  else
+    {:error, :too_far}
+  end
+end
+
+# 🆕 Calcul de distance selon la faction
+defp calculate_distance({r1, c1}, {r2, c2}, faction) do
+  case faction do
+    :dolphins ->
+      # Distance de Chebyshev (diagonales = 1 case)
+      max(abs(r1 - r2), abs(c1 - c2))
+
+    _ ->
+      # Distance de Manhattan (seulement orthogonal)
+      abs(r1 - r2) + abs(c1 - c2)
+  end
+end
 
   @doc """
   Exécute une action PUSH (dés 1-3)
